@@ -1,0 +1,35 @@
+{
+  "session_id": "6bb12cff-0b26-4632-bea5-3cd1f2632724",
+  "cwd": "/home/nadeemramli/workspace/github.com/nadeemramli/metric-mapping",
+  "git_branch": "main",
+  "model": "claude-fable-5",
+  "parse_errors": 0,
+  "sidechain_records": 0,
+  "todos": 0,
+  "usage": {
+    "input_tokens": 11023,
+    "output_tokens": 646,
+    "cache_read_tokens": 55337,
+    "cache_creation_tokens": 29945,
+    "context_pct": 24.2005
+  },
+  "final_state": "done",
+  "timeline": [
+    {
+      "ts": "2026-07-07T15:00:42.285Z",
+      "state": "thinking"
+    },
+    {
+      "ts": "2026-07-07T15:29:12.866Z",
+      "state": "done"
+    },
+    {
+      "ts": "2026-07-07T15:29:43.260Z",
+      "state": "thinking"
+    },
+    {
+      "ts": "2026-07-07T15:29:48.082Z",
+      "state": "done"
+    }
+  ]
+}

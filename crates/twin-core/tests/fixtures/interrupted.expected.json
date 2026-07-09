@@ -1,0 +1,54 @@
+{
+  "session_id": "82ab5f81-dbf8-4816-8bf2-bdc6bf4b6280",
+  "cwd": "/home/nadeemramli/workspace/github.com/nadeemramli/metric-mapping",
+  "git_branch": "main",
+  "model": "claude-opus-4-8",
+  "parse_errors": 0,
+  "sidechain_records": 0,
+  "todos": 0,
+  "usage": {
+    "input_tokens": 6975,
+    "output_tokens": 1534,
+    "cache_read_tokens": 36789,
+    "cache_creation_tokens": 33872,
+    "context_pct": 20.925499
+  },
+  "final_state": "interrupted",
+  "timeline": [
+    {
+      "ts": "2026-07-04T08:41:47.983Z",
+      "state": "thinking"
+    },
+    {
+      "ts": "2026-07-04T08:41:55.283Z",
+      "state": "tool_running",
+      "task": "ToolSearch"
+    },
+    {
+      "ts": "2026-07-04T08:41:55.283Z",
+      "state": "thinking"
+    },
+    {
+      "ts": "2026-07-04T08:41:56.668Z",
+      "state": "tool_running",
+      "task": "Bash: Check Obsidian vault via WSL mount"
+    },
+    {
+      "ts": "2026-07-04T08:45:02.265Z",
+      "state": "thinking"
+    },
+    {
+      "ts": "2026-07-04T08:45:08.252Z",
+      "state": "tool_running",
+      "task": "mcp__claude_ai_Linear__list_teams"
+    },
+    {
+      "ts": "2026-07-04T08:45:11.882Z",
+      "state": "thinking"
+    },
+    {
+      "ts": "2026-07-04T08:45:17.158Z",
+      "state": "interrupted"
+    }
+  ]
+}
