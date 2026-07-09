@@ -157,6 +157,7 @@ mod tests {
             machine: "windows".into(),
             project: "C:\\proj".into(),
             status,
+            git_branch: None,
             current_task: Some("shell_command".into()),
             needs_user: false,
             needs_user_reason: None,

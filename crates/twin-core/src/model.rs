@@ -123,6 +123,10 @@ pub struct AgentSnapshot {
     /// Project path or human name.
     pub project: String,
     pub status: AgentStatus,
+    /// Git branch of the session's working tree, when the transcript
+    /// records it (drives the card's branch badge).
+    #[serde(default)]
+    pub git_branch: Option<String>,
     pub current_task: Option<String>,
     pub needs_user: bool,
     pub needs_user_reason: Option<String>,
@@ -158,6 +162,7 @@ mod tests {
             machine: "wsl".into(),
             project: "~/workspace/github.com/nadeemramli/twinagent".into(),
             status: AgentStatus::ToolRunning,
+            git_branch: None,
             current_task: Some("cargo build".into()),
             needs_user: false,
             needs_user_reason: None,

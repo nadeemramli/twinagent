@@ -1,0 +1,186 @@
+<script lang="ts">
+  import type { AgentSnapshot } from "./hub.svelte";
+  import { ago, compact, projectName } from "./format";
+  import Gauge from "./Gauge.svelte";
+
+  let { session, now }: { session: AgentSnapshot; now: number } = $props();
+
+  const STATUS_LABEL: Record<string, string> = {
+    thinking: "thinking",
+    tool_running: "running",
+    needs_you: "needs you",
+    done: "done",
+    failed: "failed",
+    idle: "idle",
+    stale: "stale",
+  };
+</script>
+
+<article class="card" class:attention={session.needs_user}>
+  <header>
+    <span class="status {session.status}">
+      <span class="status-dot"></span>{STATUS_LABEL[session.status] ?? session.status}
+    </span>
+    <span class="project" title={session.project}>{projectName(session.project)}</span>
+    {#if session.git_branch}
+      <span class="branch" title="git branch">{session.git_branch}</span>
+    {/if}
+    <span class="source">{session.source === "claude-code" ? "claude" : session.source}</span>
+  </header>
+
+  {#if session.current_task}
+    <p class="task" title={session.current_task}>{session.current_task}</p>
+  {:else if session.needs_user_reason}
+    <p class="task attention-text">{session.needs_user_reason}</p>
+  {/if}
+
+  <footer>
+    {#if session.usage.context_pct != null}
+      <Gauge pct={session.usage.context_pct} />
+    {:else}
+      <span class="no-gauge">no context reading</span>
+    {/if}
+    <span class="tokens" title="input · output · cache read">
+      {compact(session.usage.input_tokens)} in · {compact(session.usage.output_tokens)} out
+      · {compact(session.usage.cache_read_tokens)} cached
+    </span>
+    <span class="when">{ago(session.last_activity, now)}</span>
+  </footer>
+</article>
+
+<style>
+  .card {
+    padding: 9px 12px;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.035);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .card.attention {
+    border-color: rgba(245, 166, 35, 0.4);
+  }
+
+  header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .status {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 10.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    flex: none;
+  }
+
+  .status-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+  }
+
+  .status.thinking,
+  .status.tool_running {
+    color: #4ade80;
+  }
+
+  .status.needs_you {
+    color: #f5a623;
+  }
+
+  .status.failed {
+    color: #f0442c;
+  }
+
+  .status.done {
+    color: #8a8f98;
+  }
+
+  .status.idle,
+  .status.stale {
+    color: #565b64;
+  }
+
+  .project {
+    font-weight: 600;
+    font-size: 12.5px;
+    color: #dee1e6;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .branch {
+    font-size: 10.5px;
+    color: #8a8f98;
+    background: rgba(255, 255, 255, 0.06);
+    padding: 2px 7px;
+    border-radius: 8px;
+    flex: none;
+    max-width: 110px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .source {
+    margin-left: auto;
+    font-size: 10.5px;
+    color: #565b64;
+    flex: none;
+  }
+
+  .task {
+    margin: 0;
+    font-size: 11.5px;
+    color: #8a8f98;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .attention-text {
+    color: #ffc46b;
+  }
+
+  footer {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  footer :global(.gauge) {
+    flex: 1;
+    min-width: 70px;
+  }
+
+  .no-gauge {
+    flex: 1;
+    font-size: 10.5px;
+    color: #565b64;
+  }
+
+  .tokens {
+    font-size: 10.5px;
+    color: #8a8f98;
+    font-variant-numeric: tabular-nums;
+    flex: none;
+  }
+
+  .when {
+    font-size: 10.5px;
+    color: #565b64;
+    flex: none;
+    min-width: 48px;
+    text-align: right;
+  }
+</style>

@@ -245,6 +245,7 @@ mod tests {
             machine: "wsl".into(),
             project: "demo".into(),
             status,
+            git_branch: None,
             current_task: None,
             needs_user: matches!(status, AgentStatus::NeedsYou),
             needs_user_reason: None,

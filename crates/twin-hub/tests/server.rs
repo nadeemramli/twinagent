@@ -13,6 +13,7 @@ fn snapshot(id: &str, status: AgentStatus) -> AgentSnapshot {
         machine: "wsl".into(),
         project: "demo".into(),
         status,
+        git_branch: None,
         current_task: Some("cargo test".into()),
         needs_user: matches!(status, AgentStatus::NeedsYou),
         needs_user_reason: None,

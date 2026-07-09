@@ -128,6 +128,7 @@ mod tests {
             machine: machine.into(),
             project: project.into(),
             status: AgentStatus::Thinking,
+            git_branch: None,
             current_task: None,
             needs_user: false,
             needs_user_reason: None,

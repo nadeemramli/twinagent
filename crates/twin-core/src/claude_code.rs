@@ -429,6 +429,7 @@ impl ClaudeSessionTracker {
             machine: machine.to_string(),
             project: self.cwd.clone().unwrap_or_default(),
             status: state.to_status(),
+            git_branch: self.git_branch.clone(),
             current_task: self.current_task(),
             needs_user: needs_user_reason.is_some(),
             needs_user_reason,

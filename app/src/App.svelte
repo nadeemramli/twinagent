@@ -3,8 +3,14 @@
   import { listen } from "@tauri-apps/api/event";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { hub, connectHub } from "./lib/hub.svelte";
+  import AgentCard from "./lib/AgentCard.svelte";
+  import UsageFooter from "./lib/UsageFooter.svelte";
 
   connectHub();
+
+  // A slow clock for relative times and reset countdowns.
+  let now = $state(Date.now());
+  setInterval(() => (now = Date.now()), 10_000);
 
   // Rust owns the expanded state (it owns the window size); the webview
   // mirrors it via the `panel` event.
@@ -72,6 +78,37 @@
           ? "working"
           : "quiet",
   );
+
+  // Panel: cards grouped by machine, most recent activity first, attention
+  // floats to the top within a group.
+  const STATUS_RANK: Record<string, number> = {
+    needs_you: 0,
+    failed: 1,
+    tool_running: 2,
+    thinking: 3,
+    done: 4,
+    idle: 5,
+    stale: 6,
+  };
+  const machines = $derived.by(() => {
+    const groups = new Map<string, (typeof hub.sessions)[string][]>();
+    for (const s of Object.values(hub.sessions)) {
+      const list = groups.get(s.machine) ?? [];
+      list.push(s);
+      groups.set(s.machine, list);
+    }
+    for (const list of groups.values()) {
+      list.sort(
+        (a, b) =>
+          (STATUS_RANK[a.status] ?? 9) - (STATUS_RANK[b.status] ?? 9) ||
+          b.last_activity.localeCompare(a.last_activity),
+      );
+    }
+    return [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  });
+  const usageReports = $derived(
+    Object.values(hub.usage).sort((a, b) => a.machine.localeCompare(b.machine)),
+  );
 </script>
 
 <svelte:window onkeydown={onKeydown} />
@@ -104,8 +141,22 @@
 
   {#if expanded}
     <section class="panel">
-      <!-- Agent cards, gauges, and usage arrive with TWI-13. -->
-      <p class="placeholder">Panel content lands with TWI-13.</p>
+      <div class="sessions">
+        {#if machines.length === 0}
+          <p class="empty">
+            No agents yet.
+            <span>Sessions appear here when Claude Code or Codex runs.</span>
+          </p>
+        {:else}
+          {#each machines as [machine, sessions] (machine)}
+            <h3 class="machine-header">{machine}</h3>
+            {#each sessions as session (`${session.source}/${session.agent_id}`)}
+              <AgentCard {session} {now} />
+            {/each}
+          {/each}
+        {/if}
+      </div>
+      <UsageFooter reports={usageReports} {now} />
     </section>
   {/if}
 </main>
@@ -237,7 +288,7 @@
       0 1px 2px rgba(0, 0, 0, 0.3),
       0 10px 32px rgba(0, 0, 0, 0.42);
     color: #dee1e6;
-    overflow-y: auto;
+    overflow: hidden;
     animation: reveal 160ms ease-out;
   }
 
@@ -259,13 +310,50 @@
     }
   }
 
-  .placeholder {
-    margin: 16px;
-    color: #8a8f98;
+  .panel {
+    display: flex;
+    flex-direction: column;
     font:
-      400 12.5px/1.5 "Segoe UI Variable Text",
+      400 12.5px/1.4 "Segoe UI Variable Text",
       "Segoe UI",
       system-ui,
       sans-serif;
+  }
+
+  .sessions {
+    flex: 1;
+    overflow-y: auto;
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
+  }
+
+  .machine-header {
+    margin: 4px 0 2px;
+    font-size: 10.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #565b64;
+  }
+
+  .machine-header:first-child {
+    margin-top: 0;
+  }
+
+  .empty {
+    margin: 24px 8px;
+    text-align: center;
+    color: #8a8f98;
+  }
+
+  .empty span {
+    display: block;
+    margin-top: 4px;
+    font-size: 11px;
+    color: #565b64;
   }
 </style>

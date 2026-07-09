@@ -26,6 +26,7 @@ export interface AgentSnapshot {
   machine: string;
   project: string;
   status: AgentStatus;
+  git_branch: string | null;
   current_task: string | null;
   needs_user: boolean;
   needs_user_reason: string | null;
@@ -34,10 +35,44 @@ export interface AgentSnapshot {
   jump: { type: string; target: string } | null;
 }
 
+export interface TokenCounts {
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_creation_tokens: number;
+}
+
+export interface WindowUsage {
+  tokens: TokenCounts;
+  messages: number;
+}
+
+/// JSONL-derived Claude estimate — always confidence "estimated".
+export interface PlanEstimate {
+  five_hour: WindowUsage;
+  five_hour_resets_at: string | null;
+  weekly: WindowUsage;
+  confidence: "estimated" | "exact" | "stale";
+}
+
+export interface RateLimitWindow {
+  used_percent: number;
+  window_minutes: number | null;
+  resets_at: number | null;
+}
+
+/// Exact Codex plan windows straight from rollout rate_limits.
+export interface RateLimits {
+  primary: RateLimitWindow | null;
+  secondary: RateLimitWindow | null;
+  plan_type: string | null;
+  observed_at: string | null;
+}
+
 export interface UsageReport {
   machine: string;
-  claude: unknown | null;
-  codex: unknown | null;
+  claude: PlanEstimate | null;
+  codex: RateLimits | null;
   reported_at: string;
 }
 
