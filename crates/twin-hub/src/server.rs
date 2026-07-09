@@ -60,7 +60,7 @@ async fn ingest_snapshots(
 }
 
 async fn list_sessions(State(service): State<HubService>) -> Json<Vec<AgentSnapshot>> {
-    Json(service.sessions())
+    Json(service.logical_sessions())
 }
 
 async fn ws_upgrade(
@@ -77,7 +77,7 @@ async fn ws_session(service: HubService, socket: WebSocket) {
     // lost; a duplicate upsert after Full is harmless.
     let mut rx = service.subscribe();
     let full = Event::Full {
-        sessions: service.sessions(),
+        sessions: service.logical_sessions(),
     };
     let Ok(text) = serde_json::to_string(&full) else {
         return;
@@ -95,7 +95,7 @@ async fn ws_session(service: HubService, socket: WebSocket) {
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
                         rx = rx.resubscribe();
                         serde_json::to_string(&Event::Full {
-                            sessions: service.sessions(),
+                            sessions: service.logical_sessions(),
                         })
                         .ok()
                     }

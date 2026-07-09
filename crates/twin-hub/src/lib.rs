@@ -5,6 +5,7 @@
 //! deployment. Collectors POST [`AgentSnapshot`]s in; UI clients hold a
 //! WebSocket and receive the full state once, then diffs.
 
+pub mod dedup;
 pub mod embedded;
 pub mod registry;
 pub mod server;
@@ -17,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 use twin_core::AgentSnapshot;
 
+pub use dedup::{dedupe, logical_key, normalize_project};
 pub use embedded::EmbeddedCollector;
 pub use registry::{session_key, Delta, Hub};
 pub use store::Store;
@@ -35,6 +37,9 @@ pub enum Event {
     /// A session appeared or changed.
     Upsert {
         key: String,
+        /// Machine-agnostic identity (`source/agent_id`) — UI clients key
+        /// their cards by this so cross-side duplicates collapse (TWI-10).
+        logical_key: String,
         session: AgentSnapshot,
         /// True on the edge into needs-you — the toast trigger.
         entered_needs_you: bool,
@@ -119,6 +124,7 @@ impl HubService {
         ) || (delta == Delta::New && snapshot.needs_user);
         let _ = self.inner.tx.send(Event::Upsert {
             key,
+            logical_key: dedup::logical_key(&snapshot),
             session: snapshot,
             entered_needs_you,
         });
@@ -153,6 +159,7 @@ impl HubService {
             }
             let _ = self.inner.tx.send(Event::Upsert {
                 key,
+                logical_key: dedup::logical_key(&snapshot),
                 session: snapshot,
                 entered_needs_you: false,
             });
@@ -165,7 +172,8 @@ impl HubService {
         }
     }
 
-    /// Current sessions, unordered.
+    /// Current sessions, unordered, one entry per raw `(machine, source,
+    /// agent_id)` observation.
     pub fn sessions(&self) -> Vec<AgentSnapshot> {
         self.inner
             .registry
@@ -174,6 +182,12 @@ impl HubService {
             .sessions()
             .cloned()
             .collect()
+    }
+
+    /// Current sessions with cross-side duplicates collapsed (TWI-10) —
+    /// what UI clients should render.
+    pub fn logical_sessions(&self) -> Vec<AgentSnapshot> {
+        dedup::dedupe(self.sessions())
     }
 
     /// Subscribe to diffs. Slow readers that lag more than the channel
