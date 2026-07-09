@@ -11,12 +11,13 @@ pub mod registry;
 pub mod server;
 pub mod store;
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
-use twin_core::AgentSnapshot;
+use twin_core::{AgentSnapshot, UsageReport};
 
 pub use dedup::{dedupe, logical_key, normalize_project};
 pub use embedded::EmbeddedCollector;
@@ -46,11 +47,17 @@ pub enum Event {
     },
     /// A session aged out.
     Removed { key: String },
+    /// A machine's plan usage changed (exact Codex windows and/or the
+    /// estimated Claude windows — each side carries its own confidence tag).
+    Usage { report: UsageReport },
 }
 
 struct Inner {
     registry: Mutex<Hub>,
     store: Option<Mutex<Store>>,
+    /// Latest plan-usage report per machine. Ephemeral by design — the
+    /// collectors regenerate it from disk within seconds of starting.
+    usage: Mutex<HashMap<String, UsageReport>>,
     tx: broadcast::Sender<Event>,
 }
 
@@ -79,6 +86,7 @@ impl HubService {
             inner: Arc::new(Inner {
                 registry: Mutex::new(registry),
                 store: store.map(Mutex::new),
+                usage: Mutex::new(HashMap::new()),
                 tx,
             }),
         }
@@ -190,6 +198,27 @@ impl HubService {
         dedup::dedupe(self.sessions())
     }
 
+    /// Record a machine's plan usage; broadcasts only when it changed
+    /// (ignoring the report timestamp, which always moves).
+    pub fn report_usage(&self, report: UsageReport) {
+        let changed = {
+            let mut usage = self.inner.usage.lock().unwrap();
+            let same = usage.get(&report.machine).is_some_and(|prev| {
+                prev.claude == report.claude && prev.codex == report.codex
+            });
+            usage.insert(report.machine.clone(), report.clone());
+            !same
+        };
+        if changed {
+            let _ = self.inner.tx.send(Event::Usage { report });
+        }
+    }
+
+    /// Latest plan usage per machine.
+    pub fn usage_reports(&self) -> Vec<UsageReport> {
+        self.inner.usage.lock().unwrap().values().cloned().collect()
+    }
+
     /// Subscribe to diffs. Slow readers that lag more than the channel
     /// capacity miss events and should refetch the full state.
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {
@@ -252,6 +281,40 @@ mod tests {
         };
         assert!(rx.try_recv().is_err(), "unchanged must not broadcast");
         assert_eq!(key, "wsl/claude-code/a");
+    }
+
+    #[test]
+    fn usage_reports_broadcast_only_on_change() {
+        let service = HubService::new(None);
+        let mut rx = service.subscribe();
+        let report = |pct: f64, at: &str| UsageReport {
+            machine: "wsl".into(),
+            claude: None,
+            codex: Some(twin_core::codex::RateLimits {
+                primary: Some(twin_core::codex::RateLimitWindow {
+                    used_percent: pct,
+                    window_minutes: Some(300),
+                    resets_at: None,
+                }),
+                secondary: None,
+                plan_type: Some("plus".into()),
+                observed_at: None,
+            }),
+            reported_at: at.into(),
+        };
+
+        service.report_usage(report(13.0, "2026-07-10T09:00:00Z"));
+        // Same numbers, newer timestamp: no rebroadcast.
+        service.report_usage(report(13.0, "2026-07-10T09:00:30Z"));
+        service.report_usage(report(14.0, "2026-07-10T09:01:00Z"));
+
+        assert!(matches!(rx.try_recv().unwrap(), Event::Usage { .. }));
+        let Event::Usage { report } = rx.try_recv().unwrap() else {
+            panic!("expected the changed report");
+        };
+        assert_eq!(report.codex.unwrap().primary.unwrap().used_percent, 14.0);
+        assert!(rx.try_recv().is_err());
+        assert_eq!(service.usage_reports().len(), 1);
     }
 
     #[test]

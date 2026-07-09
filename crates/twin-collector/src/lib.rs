@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use twin_core::{AgentSnapshot, SourceRoot};
+use twin_core::{AgentSnapshot, SourceRoot, UsageReport};
 
 /// Runtime configuration, entirely from environment variables so the
 /// systemd unit is the single place to tweak it.
@@ -43,8 +43,11 @@ impl Config {
 /// the hub is unreachable and resending everything once it's back.
 pub struct Forwarder {
     endpoint: String,
+    usage_endpoint: String,
     /// Latest unacknowledged snapshot per session key.
     pending: HashMap<String, AgentSnapshot>,
+    /// Latest unacknowledged plan-usage report (state, so newest wins).
+    pending_usage: Option<UsageReport>,
     backoff: Duration,
     next_attempt: Instant,
 }
@@ -54,9 +57,12 @@ const BACKOFF_MAX: Duration = Duration::from_secs(30);
 
 impl Forwarder {
     pub fn new(hub_url: &str) -> Self {
+        let base = hub_url.trim_end_matches('/');
         Self {
-            endpoint: format!("{}/v1/snapshots", hub_url.trim_end_matches('/')),
+            endpoint: format!("{base}/v1/snapshots"),
+            usage_endpoint: format!("{base}/v1/usage"),
             pending: HashMap::new(),
+            pending_usage: None,
             backoff: BACKOFF_MIN,
             next_attempt: Instant::now(),
         }
@@ -71,26 +77,46 @@ impl Forwarder {
         self.flush();
     }
 
+    /// Queue the machine's plan-usage report (newest wins) and try to flush.
+    /// The hub dedupes unchanged reports, so a fixed cadence is fine.
+    pub fn send_usage(&mut self, report: UsageReport) {
+        self.pending_usage = Some(report);
+        self.flush();
+    }
+
     /// How many snapshots are waiting on the hub to come back.
     pub fn pending(&self) -> usize {
         self.pending.len()
     }
 
     fn flush(&mut self) {
-        if self.pending.is_empty() || Instant::now() < self.next_attempt {
+        if (self.pending.is_empty() && self.pending_usage.is_none())
+            || Instant::now() < self.next_attempt
+        {
             return;
         }
-        let batch: Vec<&AgentSnapshot> = self.pending.values().collect();
-        let posted = ureq::post(&self.endpoint)
-            .timeout(Duration::from_secs(5))
-            .send_json(&batch);
-        match posted {
-            Ok(_) => {
+
+        let result = (|| -> Result<(), ureq::Error> {
+            if !self.pending.is_empty() {
+                let batch: Vec<&AgentSnapshot> = self.pending.values().collect();
+                ureq::post(&self.endpoint)
+                    .timeout(Duration::from_secs(5))
+                    .send_json(&batch)?;
                 self.pending.clear();
-                self.backoff = BACKOFF_MIN;
             }
+            if let Some(report) = &self.pending_usage {
+                ureq::post(&self.usage_endpoint)
+                    .timeout(Duration::from_secs(5))
+                    .send_json(report)?;
+                self.pending_usage = None;
+            }
+            Ok(())
+        })();
+
+        match result {
+            Ok(()) => self.backoff = BACKOFF_MIN,
             Err(err) => {
-                // Keep the buffer; retry with exponential backoff. The hub
+                // Keep the buffers; retry with exponential backoff. The hub
                 // restarting is normal (the Tauri app owns it).
                 eprintln!(
                     "twin-collector: hub unreachable ({err}); {} snapshot(s) buffered, retrying in {:?}",

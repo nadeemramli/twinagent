@@ -132,6 +132,20 @@ pub struct AgentSnapshot {
     pub jump: Option<JumpTarget>,
 }
 
+/// Machine-level plan usage, one per collector: Codex numbers are exact
+/// (straight from `rate_limits` on disk), Claude numbers are JSONL-derived
+/// estimates. Each side carries its own [`ReadingConfidence`] — the widget
+/// must never present an estimate as exact.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UsageReport {
+    /// Machine tag, same vocabulary as [`AgentSnapshot::machine`].
+    pub machine: String,
+    pub claude: Option<crate::plan_usage::PlanEstimate>,
+    pub codex: Option<crate::codex::RateLimits>,
+    /// RFC 3339 timestamp of when the report was assembled.
+    pub reported_at: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

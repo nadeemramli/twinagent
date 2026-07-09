@@ -31,9 +31,17 @@ impl EmbeddedCollector {
             .name("twin-embedded-collector".into())
             .spawn(move || {
                 let mut pipeline = Pipeline::new(machine, roots, Duration::from_secs(5));
+                let usage_cadence = Duration::from_secs(30);
+                let mut next_usage = std::time::Instant::now();
                 while !stop_flag.load(Ordering::Relaxed) {
                     for snapshot in pipeline.poll(Duration::from_millis(500)) {
                         service.ingest(snapshot);
+                    }
+                    // Plan usage on a fixed cadence; the hub dedupes
+                    // unchanged reports.
+                    if std::time::Instant::now() >= next_usage {
+                        service.report_usage(pipeline.usage_report(chrono::Utc::now()));
+                        next_usage = std::time::Instant::now() + usage_cadence;
                     }
                 }
             })

@@ -16,7 +16,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::Value;
-use twin_core::AgentSnapshot;
+use twin_core::{AgentSnapshot, UsageReport};
 
 use crate::{Event, HubService};
 
@@ -25,6 +25,7 @@ pub fn router(service: HubService) -> Router {
     Router::new()
         .route("/v1/snapshots", post(ingest_snapshots))
         .route("/v1/sessions", get(list_sessions))
+        .route("/v1/usage", post(ingest_usage).get(list_usage))
         .route("/v1/ws", get(ws_upgrade))
         .with_state(service)
 }
@@ -63,6 +64,18 @@ async fn list_sessions(State(service): State<HubService>) -> Json<Vec<AgentSnaps
     Json(service.logical_sessions())
 }
 
+async fn ingest_usage(
+    State(service): State<HubService>,
+    Json(report): Json<UsageReport>,
+) -> StatusCode {
+    service.report_usage(report);
+    StatusCode::ACCEPTED
+}
+
+async fn list_usage(State(service): State<HubService>) -> Json<Vec<UsageReport>> {
+    Json(service.usage_reports())
+}
+
 async fn ws_upgrade(
     State(service): State<HubService>,
     upgrade: WebSocketUpgrade,
@@ -84,6 +97,15 @@ async fn ws_session(service: HubService, socket: WebSocket) {
     };
     if sink.send(Message::Text(text.into())).await.is_err() {
         return;
+    }
+    // Current plan usage follows the full state on connect.
+    for report in service.usage_reports() {
+        let Ok(text) = serde_json::to_string(&Event::Usage { report }) else {
+            continue;
+        };
+        if sink.send(Message::Text(text.into())).await.is_err() {
+            return;
+        }
     }
 
     loop {

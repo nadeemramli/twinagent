@@ -35,9 +35,17 @@ fn main() {
     );
     let mut forwarder = Forwarder::new(&config.hub_url);
 
+    let usage_cadence = Duration::from_secs(30);
+    let mut next_usage = std::time::Instant::now();
     loop {
         let snapshots = pipeline.poll(Duration::from_millis(500));
         // send() also flushes anything buffered from an earlier outage.
         forwarder.send(snapshots);
+
+        // Plan usage on a fixed cadence; the hub dedupes unchanged reports.
+        if std::time::Instant::now() >= next_usage {
+            forwarder.send_usage(pipeline.usage_report(chrono::Utc::now()));
+            next_usage = std::time::Instant::now() + usage_cadence;
+        }
     }
 }

@@ -189,6 +189,29 @@ impl Pipeline {
         crate::plan_usage::estimate(&events, now)
     }
 
+    /// Newest exact Codex plan reading across every tracked rollout —
+    /// plan usage is account-level, so the freshest observation wins.
+    pub fn codex_rate_limits(&self) -> Option<crate::codex::RateLimits> {
+        self.files
+            .values()
+            .filter_map(|s| match &s.tracker {
+                Tracker::Codex(t) => t.rate_limits().cloned(),
+                Tracker::Claude(_) => None,
+            })
+            .max_by_key(|rl| rl.observed_at)
+    }
+
+    /// Machine-level usage report for the hub: exact Codex windows plus the
+    /// estimated Claude windows, in one envelope.
+    pub fn usage_report(&self, now: DateTime<Utc>) -> crate::model::UsageReport {
+        crate::model::UsageReport {
+            machine: self.machine.clone(),
+            claude: Some(self.claude_plan_estimate(now)),
+            codex: self.codex_rate_limits(),
+            reported_at: now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        }
+    }
+
     /// Everything currently tracked, evaluated now — for a full resend after
     /// the hub connection drops.
     pub fn all_snapshots(&self) -> Vec<AgentSnapshot> {
