@@ -28,8 +28,20 @@ fn native_roots() -> Vec<SourceRoot> {
     ]
 }
 
+#[tauri::command]
+fn toggle_panel(window: tauri::WebviewWindow) {
+    widget::toggle_panel(&window);
+}
+
+#[tauri::command]
+fn set_panel(window: tauri::WebviewWindow, expanded: bool) {
+    widget::set_expanded(&window, expanded);
+}
+
 fn main() {
     tauri::Builder::default()
+        .invoke_handler(tauri::generate_handler![toggle_panel, set_panel])
+        .manage(widget::PanelState::default())
         .setup(|app| {
             // Hub state lives in the app data dir; history survives restarts.
             let data_dir = app.path().app_data_dir()?;
@@ -74,6 +86,8 @@ fn main() {
                 .expect("main window exists");
             widget::position_pill(&window, &data_dir);
             widget::remember_monitor_on_move(&window, data_dir.clone());
+            widget::collapse_on_blur(&window);
+            widget::setup_hotkey(app, &data_dir)?;
 
             widget::setup_tray(app)?;
             Ok(())

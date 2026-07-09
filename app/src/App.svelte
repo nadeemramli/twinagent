@@ -1,10 +1,54 @@
 <script lang="ts">
+  import { invoke } from "@tauri-apps/api/core";
+  import { listen } from "@tauri-apps/api/event";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import { hub, connectHub } from "./lib/hub.svelte";
 
   connectHub();
 
+  // Rust owns the expanded state (it owns the window size); the webview
+  // mirrors it via the `panel` event.
+  let expanded = $state(false);
+  listen<boolean>("panel", (e) => (expanded = e.payload));
+
+  function onKeydown(e: KeyboardEvent) {
+    if (e.key === "Escape" && expanded) {
+      invoke("set_panel", { expanded: false });
+    }
+  }
+
+  // Click toggles the panel; a drag beyond a few pixels moves the window
+  // instead. Manual detection because a native drag region swallows clicks.
+  function onPointerDown(e: PointerEvent) {
+    if (e.button !== 0) return;
+    const startX = e.screenX;
+    const startY = e.screenY;
+    let dragging = false;
+
+    const onMove = (ev: PointerEvent) => {
+      if (
+        !dragging &&
+        Math.abs(ev.screenX - startX) + Math.abs(ev.screenY - startY) > 5
+      ) {
+        dragging = true;
+        cleanup();
+        getCurrentWindow().startDragging();
+      }
+    };
+    const onUp = () => {
+      cleanup();
+      if (!dragging) invoke("toggle_panel");
+    };
+    const cleanup = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }
+
   // The pill counts sessions that are engaged right now; finished and idle
-  // sessions live in the panel (TWI-13), not here.
+  // sessions live in the panel, not here.
   const working = $derived(
     Object.values(hub.sessions).filter(
       (s) => s.status === "thinking" || s.status === "tool_running",
@@ -30,18 +74,39 @@
   );
 </script>
 
-<main class="pill" data-tauri-drag-region class:offline={!hub.connected}>
-  <span class="dot {tone}" class:breathing={working > 0}></span>
-  <span class="count">{active}</span>
-  <span class="label">{active === 1 ? "agent" : "agents"}</span>
-  {#if needsYou > 0}
-    <span class="chip needs-you">{needsYou} need{needsYou === 1 ? "s" : ""} you</span>
-  {/if}
-  {#if failed > 0}
-    <span class="chip failed">{failed} failed</span>
-  {/if}
-  {#if !hub.connected}
-    <span class="chip offline-chip">connecting…</span>
+<svelte:window onkeydown={onKeydown} />
+
+<main class="shell" class:expanded>
+  <div
+    class="pill"
+    class:offline={!hub.connected}
+    onpointerdown={onPointerDown}
+    role="button"
+    tabindex="0"
+    aria-expanded={expanded}
+    aria-label="Toggle agent panel"
+  >
+    <span class="dot {tone}" class:breathing={working > 0}></span>
+    <span class="count">{active}</span>
+    <span class="label">{active === 1 ? "agent" : "agents"}</span>
+    {#if needsYou > 0}
+      <span class="chip needs-you"
+        >{needsYou} need{needsYou === 1 ? "s" : ""} you</span
+      >
+    {/if}
+    {#if failed > 0}
+      <span class="chip failed">{failed} failed</span>
+    {/if}
+    {#if !hub.connected}
+      <span class="chip offline-chip">connecting…</span>
+    {/if}
+  </div>
+
+  {#if expanded}
+    <section class="panel">
+      <!-- Agent cards, gauges, and usage arrive with TWI-13. -->
+      <p class="placeholder">Panel content lands with TWI-13.</p>
+    </section>
   {/if}
 </main>
 
@@ -53,12 +118,19 @@
     user-select: none;
   }
 
+  .shell {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    height: 100vh;
+  }
+
   .pill {
     display: flex;
     align-items: center;
     gap: 7px;
     height: 34px;
-    margin: 10px auto 0;
+    margin-top: 10px;
     width: fit-content;
     padding: 0 14px;
     border-radius: 17px;
@@ -73,6 +145,12 @@
     box-shadow:
       0 1px 2px rgba(0, 0, 0, 0.3),
       0 6px 22px rgba(0, 0, 0, 0.38);
+    cursor: pointer;
+  }
+
+  .pill:focus-visible {
+    outline: 2px solid #4ade80;
+    outline-offset: 2px;
   }
 
   .pill.offline {
@@ -123,12 +201,6 @@
     }
   }
 
-  @media (prefers-reduced-motion: reduce) {
-    .dot.breathing {
-      animation: none;
-    }
-  }
-
   .chip {
     padding: 3px 8px;
     border-radius: 10px;
@@ -150,5 +222,50 @@
     color: #8a8f98;
     background: rgba(255, 255, 255, 0.06);
     font-weight: 500;
+  }
+
+  /* The window is resized by Rust before this mounts; the content slides
+     into the new space rather than popping. */
+  .panel {
+    width: calc(100% - 24px);
+    flex: 1;
+    margin: 8px 12px 12px;
+    border-radius: 14px;
+    background: rgba(16, 17, 20, 0.94);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    box-shadow:
+      0 1px 2px rgba(0, 0, 0, 0.3),
+      0 10px 32px rgba(0, 0, 0, 0.42);
+    color: #dee1e6;
+    overflow-y: auto;
+    animation: reveal 160ms ease-out;
+  }
+
+  @keyframes reveal {
+    from {
+      opacity: 0;
+      transform: translateY(-6px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .dot.breathing,
+    .panel {
+      animation: none;
+    }
+  }
+
+  .placeholder {
+    margin: 16px;
+    color: #8a8f98;
+    font:
+      400 12.5px/1.5 "Segoe UI Variable Text",
+      "Segoe UI",
+      system-ui,
+      sans-serif;
   }
 </style>

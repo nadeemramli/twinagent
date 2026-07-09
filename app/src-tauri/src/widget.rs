@@ -5,17 +5,34 @@
 //! the fallback surface when the pill is hidden, and hosts Quit/Settings.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
-use tauri::{Manager, PhysicalPosition, WebviewWindow};
+use tauri::{Emitter, LogicalSize, Manager, PhysicalPosition, WebviewWindow};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
+
+/// Pill and panel logical sizes; width is shared so expanding only grows
+/// downward and no horizontal repositioning is needed.
+const WIDTH: f64 = 420.0;
+const PILL_HEIGHT: f64 = 64.0;
+const PANEL_HEIGHT: f64 = 560.0;
+/// Default toggle hotkey; rebindable via widget.json (TWI-15 adds UI).
+const DEFAULT_HOTKEY: &str = "ctrl+shift+space";
+
+/// Whether the window is currently the full panel (managed app state).
+#[derive(Default)]
+pub struct PanelState(AtomicBool);
 
 #[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
 struct WidgetConfig {
     /// OS name of the monitor the pill lives on (e.g. `\\.\DISPLAY1`).
     monitor: Option<String>,
+    /// Global toggle shortcut, e.g. `ctrl+shift+space`.
+    hotkey: Option<String>,
 }
 
 fn config_path(data_dir: &Path) -> PathBuf {
@@ -81,6 +98,68 @@ pub fn remember_monitor_on_move(window: &WebviewWindow, data_dir: PathBuf) {
                     monitor: Some(name),
                 },
             );
+        }
+    });
+}
+
+/// Switch between pill and panel (TWI-12). The window only grows downward
+/// (shared width, top edge fixed), and the webview hears about it via a
+/// `panel` event so it can stage the content transition.
+pub fn set_expanded(window: &WebviewWindow, expanded: bool) {
+    let state = window.state::<PanelState>();
+    state.0.store(expanded, Ordering::Relaxed);
+    let height = if expanded { PANEL_HEIGHT } else { PILL_HEIGHT };
+    let _ = window.set_size(LogicalSize::new(WIDTH, height));
+    if expanded {
+        let _ = window.set_focus();
+    }
+    let _ = window.emit("panel", expanded);
+}
+
+pub fn toggle_panel(window: &WebviewWindow) {
+    let expanded = window.state::<PanelState>().0.load(Ordering::Relaxed);
+    set_expanded(window, !expanded);
+}
+
+/// Register the global toggle hotkey from widget.json (default
+/// `ctrl+shift+space`). An unparseable binding falls back to the default
+/// rather than leaving the widget hotkey-less.
+pub fn setup_hotkey(app: &tauri::App, data_dir: &Path) -> tauri::Result<()> {
+    let binding = load_config(data_dir)
+        .hotkey
+        .unwrap_or_else(|| DEFAULT_HOTKEY.into());
+    let shortcut: Shortcut = binding
+        .parse()
+        .or_else(|_| DEFAULT_HOTKEY.parse())
+        .expect("default hotkey parses");
+
+    app.handle().plugin(
+        tauri_plugin_global_shortcut::Builder::new()
+            .with_handler(move |app, _shortcut, event| {
+                if event.state() == ShortcutState::Pressed {
+                    if let Some(window) = app.get_webview_window("main") {
+                        toggle_panel(&window);
+                    }
+                }
+            })
+            .build(),
+    )?;
+    if let Err(err) = app.global_shortcut().register(shortcut) {
+        // Another app may own the combo; the pill still works by click.
+        eprintln!("twinagent: could not register hotkey {binding}: {err}");
+    }
+    Ok(())
+}
+
+/// Collapse when focus leaves the panel — the widget must never sit
+/// expanded over someone's work.
+pub fn collapse_on_blur(window: &WebviewWindow) {
+    let tracked = window.clone();
+    window.on_window_event(move |event| {
+        if matches!(event, tauri::WindowEvent::Focused(false))
+            && tracked.state::<PanelState>().0.load(Ordering::Relaxed)
+        {
+            set_expanded(&tracked, false);
         }
     });
 }
