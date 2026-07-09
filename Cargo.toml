@@ -1,0 +1,28 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/twin-core",
+    "crates/twin-hub",
+    "crates/twin-collector",
+    "app/src-tauri",
+]
+# The Tauri app needs platform GUI libraries (WebView2 on Windows, webkit2gtk on
+# Linux), so it is excluded from the default build set. Build it explicitly with
+# `cargo tauri dev` / `cargo tauri build` from `app/`.
+default-members = [
+    "crates/twin-core",
+    "crates/twin-hub",
+    "crates/twin-collector",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace.dependencies]
+twin-core = { path = "crates/twin-core" }
+twin-hub = { path = "crates/twin-hub" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
