@@ -20,7 +20,7 @@ use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::model::{AgentSnapshot, AgentSource, AgentStatus, JumpTarget, UsageMetrics};
+use crate::model::{AgentSnapshot, AgentSource, JumpTarget, SessionState, UsageMetrics};
 
 /// Tool pending longer than this without a result is assumed to be waiting
 /// for permission.
@@ -33,34 +33,6 @@ pub const IDLE_SILENCE: Duration = Duration::seconds(10);
 pub const STALE_SILENCE: Duration = Duration::minutes(30);
 /// Context window assumed for the gauge until model metadata says otherwise.
 pub const CONTEXT_WINDOW_TOKENS: u64 = 200_000;
-
-/// Session lifecycle as derived from the transcript alone. Richer than
-/// [`AgentStatus`] (interrupted is its own thing here) so the widget can
-/// distinguish "you stopped it" from "it wants permission".
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SessionState {
-    Thinking,
-    ToolRunning,
-    NeedsYou,
-    Interrupted,
-    Done,
-    Idle,
-    Stale,
-}
-
-impl SessionState {
-    pub fn to_status(self) -> AgentStatus {
-        match self {
-            SessionState::Thinking => AgentStatus::Thinking,
-            SessionState::ToolRunning => AgentStatus::ToolRunning,
-            SessionState::NeedsYou | SessionState::Interrupted => AgentStatus::NeedsYou,
-            SessionState::Done => AgentStatus::Done,
-            SessionState::Idle => AgentStatus::Idle,
-            SessionState::Stale => AgentStatus::Stale,
-        }
-    }
-}
 
 /// One TodoWrite entry (best-effort extraction).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -478,6 +450,7 @@ fn flatten_text(content: Option<&Value>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::AgentStatus;
 
     fn ts(secs: i64) -> String {
         DateTime::<Utc>::from_timestamp(1_700_000_000 + secs, 0)

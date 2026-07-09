@@ -30,6 +30,35 @@ pub enum AgentStatus {
     Stale,
 }
 
+/// Session lifecycle as derived from a transcript alone. Richer than
+/// [`AgentStatus`] (interrupted is its own thing here) so the widget can
+/// distinguish "you stopped it" from "it wants permission". Shared by every
+/// transcript-based parser (Claude Code, Codex).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionState {
+    Thinking,
+    ToolRunning,
+    NeedsYou,
+    Interrupted,
+    Done,
+    Idle,
+    Stale,
+}
+
+impl SessionState {
+    pub fn to_status(self) -> AgentStatus {
+        match self {
+            SessionState::Thinking => AgentStatus::Thinking,
+            SessionState::ToolRunning => AgentStatus::ToolRunning,
+            SessionState::NeedsYou | SessionState::Interrupted => AgentStatus::NeedsYou,
+            SessionState::Done => AgentStatus::Done,
+            SessionState::Idle => AgentStatus::Idle,
+            SessionState::Stale => AgentStatus::Stale,
+        }
+    }
+}
+
 /// Token/context accounting for one session.
 ///
 /// `context_pct` drives the gauge (green <50, yellow 50-70, orange 70-90,

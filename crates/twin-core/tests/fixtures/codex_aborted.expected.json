@@ -1,0 +1,131 @@
+{
+  "session_id": "019ec292-3722-7e31-a0fe-1ef1331ad50d",
+  "cwd": "C:\\Users\\Nadeem\\Desktop\\Obsidian\\personal-blog\\content\\2. Panduan Ringkas\\If You're So Smart, Why Are You Not",
+  "git_branch": null,
+  "model": "gpt-5.5",
+  "parse_errors": 0,
+  "approval_policy": "on-request",
+  "rate_limits": {
+    "primary": {
+      "used_percent": 45.0,
+      "window_minutes": 300,
+      "resets_at": 1781878024
+    },
+    "secondary": {
+      "used_percent": 10.0,
+      "window_minutes": 10080,
+      "resets_at": 1782432532
+    },
+    "plan_type": "plus",
+    "observed_at": "2026-06-19T11:30:58.735Z"
+  },
+  "usage": {
+    "input_tokens": 2776953,
+    "output_tokens": 141193,
+    "cache_read_tokens": 24608256,
+    "cache_creation_tokens": 0,
+    "context_pct": 71.46981
+  },
+  "final_state": "interrupted",
+  "timeline": [
+    {
+      "ts": "2026-06-13T20:02:09.915Z",
+      "state": "thinking"
+    },
+    {
+      "ts": "2026-06-19T09:58:07.172Z",
+      "state": "tool_running",
+      "task": "shell_command"
+    },
+    {
+      "ts": "2026-06-19T09:58:09.351Z",
+      "state": "thinking"
+    },
+    {
+      "ts": "2026-06-19T09:58:16.104Z",
+      "state": "tool_running",
+      "task": "load_workspace_dependencies"
+    },
+    {
+      "ts": "2026-06-19T09:58:16.571Z",
+      "state": "thinking"
+    },
+    {
+      "ts": "2026-06-19T09:58:27.731Z",
+      "state": "tool_running",
+      "task": "shell_command"
+    },
+    {
+      "ts": "2026-06-19T09:58:31.968Z",
+      "state": "needs_you",
+      "task": "shell_command"
+    },
+    {
+      "ts": "2026-06-19T09:58:31.968Z",
+      "state": "thinking"
+    },
+    {
+      "ts": "2026-06-19T09:58:47.620Z",
+      "state": "tool_running",
+      "task": "shell_command"
+    },
+    {
+      "ts": "2026-06-19T09:58:51.271Z",
+      "state": "needs_you",
+      "task": "shell_command"
+    },
+    {
+      "ts": "2026-06-19T09:58:51.373Z",
+      "state": "thinking"
+    },
+    {
+      "ts": "2026-06-19T09:59:31.262Z",
+      "state": "done"
+    },
+    {
+      "ts": "2026-06-19T11:29:26.970Z",
+      "state": "thinking"
+    },
+    {
+      "ts": "2026-06-19T11:29:51.803Z",
+      "state": "tool_running",
+      "task": "shell_command"
+    },
+    {
+      "ts": "2026-06-19T11:29:59.321Z",
+      "state": "needs_you",
+      "task": "shell_command"
+    },
+    {
+      "ts": "2026-06-19T11:29:59.344Z",
+      "state": "thinking"
+    },
+    {
+      "ts": "2026-06-19T11:30:19.934Z",
+      "state": "tool_running",
+      "task": "shell_command"
+    },
+    {
+      "ts": "2026-06-19T11:30:28.263Z",
+      "state": "needs_you",
+      "task": "shell_command"
+    },
+    {
+      "ts": "2026-06-19T11:30:28.380Z",
+      "state": "thinking"
+    },
+    {
+      "ts": "2026-06-19T11:30:41.167Z",
+      "state": "tool_running",
+      "task": "view_image"
+    },
+    {
+      "ts": "2026-06-19T11:30:42.868Z",
+      "state": "thinking"
+    },
+    {
+      "ts": "2026-06-19T11:30:58.763Z",
+      "state": "interrupted"
+    }
+  ]
+}

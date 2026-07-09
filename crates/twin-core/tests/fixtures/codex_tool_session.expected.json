@@ -1,0 +1,229 @@
+{
+  "session_id": "019e949b-1ad7-7433-9176-3355d9dd948a",
+  "cwd": "C:\\Users\\Nadeem\\Desktop\\Obsidian\\build-blog\\build-vault\\8. Building Blocks",
+  "git_branch": "main",
+  "model": "gpt-5.5",
+  "parse_errors": 0,
+  "approval_policy": "on-request",
+  "rate_limits": {
+    "primary": {
+      "used_percent": 4.0,
+      "window_minutes": 300,
+      "resets_at": 1780627713
+    },
+    "secondary": {
+      "used_percent": 1.0,
+      "window_minutes": 10080,
+      "resets_at": 1781214513
+    },
+    "plan_type": "plus",
+    "observed_at": "2026-06-04T21:58:04.715Z"
+  },
+  "usage": {
+    "input_tokens": 143562,
+    "output_tokens": 12878,
+    "cache_read_tokens": 1224576,
+    "cache_creation_tokens": 0,
+    "context_pct": 33.821594
+  },
+  "final_state": "done",
+  "timeline": [
+    {
+      "ts": "2026-06-04T21:48:24.566Z",
+      "state": "thinking"
+    },
+    {
+      "ts": "2026-06-04T21:48:36.290Z",
+      "state": "tool_running",
+      "task": "shell_command"
+    },
+    {
+      "ts": "2026-06-04T21:48:39.377Z",
+      "state": "needs_you",
+      "task": "shell_command"
+    },
+    {
+      "ts": "2026-06-04T21:48:41.268Z",
+      "state": "thinking"
+    },
+    {
+      "ts": "2026-06-04T21:48:54.498Z",
+      "state": "tool_running",
+      "task": "shell_command"
+    },
+    {
+      "ts": "2026-06-04T21:48:57.439Z",
+      "state": "needs_you",
+      "task": "shell_command"
+    },
+    {
+      "ts": "2026-06-04T21:48:57.633Z",
+      "state": "thinking"
+    },
+    {
+      "ts": "2026-06-04T21:49:13.934Z",
+      "state": "tool_running",
+      "task": "shell_command"
+    },
+    {
+      "ts": "2026-06-04T21:49:14.991Z",
+      "state": "thinking"
+    },
+    {
+      "ts": "2026-06-04T21:49:31.946Z",
+      "state": "tool_running",
+      "task": "shell_command"
+    },
+    {
+      "ts": "2026-06-04T21:49:33.287Z",
+      "state": "thinking"
+    },
+    {
+      "ts": "2026-06-04T21:49:53.171Z",
+      "state": "tool_running",
+      "task": "shell_command"
+    },
+    {
+      "ts": "2026-06-04T21:49:54.962Z",
+      "state": "thinking"
+    },
+    {
+      "ts": "2026-06-04T21:50:08.823Z",
+      "state": "tool_running",
+      "task": "shell_command"
+    },
+    {
+      "ts": "2026-06-04T21:50:11.205Z",
+      "state": "thinking"
+    },
+    {
+      "ts": "2026-06-04T21:50:34.793Z",
+      "state": "done"
+    },
+    {
+      "ts": "2026-06-04T21:54:12.658Z",
+      "state": "thinking"
+    },
+    {
+      "ts": "2026-06-04T21:54:23.857Z",
+      "state": "tool_running",
+      "task": "update_plan"
+    },
+    {
+      "ts": "2026-06-04T21:54:23.880Z",
+      "state": "thinking"
+    },
+    {
+      "ts": "2026-06-04T21:54:34.919Z",
+      "state": "tool_running",
+      "task": "shell_command"
+    },
+    {
+      "ts": "2026-06-04T21:54:36.283Z",
+      "state": "thinking"
+    },
+    {
+      "ts": "2026-06-04T21:55:34.799Z",
+      "state": "tool_running",
+      "task": "apply_patch"
+    },
+    {
+      "ts": "2026-06-04T21:55:34.908Z",
+      "state": "thinking"
+    },
+    {
+      "ts": "2026-06-04T21:56:15.875Z",
+      "state": "tool_running",
+      "task": "apply_patch"
+    },
+    {
+      "ts": "2026-06-04T21:56:16.141Z",
+      "state": "thinking"
+    },
+    {
+      "ts": "2026-06-04T21:56:35.642Z",
+      "state": "tool_running",
+      "task": "apply_patch"
+    },
+    {
+      "ts": "2026-06-04T21:56:35.831Z",
+      "state": "thinking"
+    },
+    {
+      "ts": "2026-06-04T21:56:44.405Z",
+      "state": "tool_running",
+      "task": "apply_patch"
+    },
+    {
+      "ts": "2026-06-04T21:56:44.678Z",
+      "state": "thinking"
+    },
+    {
+      "ts": "2026-06-04T21:56:53.335Z",
+      "state": "tool_running",
+      "task": "apply_patch"
+    },
+    {
+      "ts": "2026-06-04T21:56:53.595Z",
+      "state": "thinking"
+    },
+    {
+      "ts": "2026-06-04T21:57:03.042Z",
+      "state": "tool_running",
+      "task": "apply_patch"
+    },
+    {
+      "ts": "2026-06-04T21:57:03.283Z",
+      "state": "thinking"
+    },
+    {
+      "ts": "2026-06-04T21:57:09.389Z",
+      "state": "tool_running",
+      "task": "apply_patch"
+    },
+    {
+      "ts": "2026-06-04T21:57:09.642Z",
+      "state": "thinking"
+    },
+    {
+      "ts": "2026-06-04T21:57:18.388Z",
+      "state": "tool_running",
+      "task": "apply_patch"
+    },
+    {
+      "ts": "2026-06-04T21:57:18.651Z",
+      "state": "thinking"
+    },
+    {
+      "ts": "2026-06-04T21:57:26.744Z",
+      "state": "tool_running",
+      "task": "update_plan"
+    },
+    {
+      "ts": "2026-06-04T21:57:26.775Z",
+      "state": "thinking"
+    },
+    {
+      "ts": "2026-06-04T21:57:36.850Z",
+      "state": "tool_running",
+      "task": "shell_command"
+    },
+    {
+      "ts": "2026-06-04T21:57:38.262Z",
+      "state": "thinking"
+    },
+    {
+      "ts": "2026-06-04T21:57:53.071Z",
+      "state": "tool_running",
+      "task": "update_plan"
+    },
+    {
+      "ts": "2026-06-04T21:57:53.095Z",
+      "state": "thinking"
+    },
+    {
+      "ts": "2026-06-04T21:58:04.739Z",
+      "state": "done"
+    }
+  ]
+}
