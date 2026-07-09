@@ -30,6 +30,22 @@ pub enum AgentStatus {
     Stale,
 }
 
+impl std::fmt::Display for AgentSource {
+    /// Kebab-case, matching the serde representation — used in registry keys
+    /// and SQLite rows.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            AgentSource::ClaudeCode => "claude-code",
+            AgentSource::Codex => "codex",
+            AgentSource::Gemini => "gemini",
+            AgentSource::Vps => "vps",
+            AgentSource::Script => "script",
+            AgentSource::Cron => "cron",
+        };
+        f.write_str(s)
+    }
+}
+
 /// Session lifecycle as derived from a transcript alone. Richer than
 /// [`AgentStatus`] (interrupted is its own thing here) so the widget can
 /// distinguish "you stopped it" from "it wants permission". Shared by every

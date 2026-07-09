@@ -1,12 +1,43 @@
-//! Standalone hub binary — the Phase 3 VPS deployment target.
-//! For now it only proves the crate wires up; the HTTP/WebSocket surface
-//! arrives with TWI-7.
+//! Standalone hub binary — the Phase 3 VPS deployment target, and handy for
+//! local development without the Tauri app.
+//!
+//! Config via env:
+//! - `TWIN_HUB_ADDR` — bind address, default `127.0.0.1:8787`.
+//! - `TWIN_HUB_DB` — SQLite path, default `twin-hub.db`; `:memory:` for none.
 
-fn main() {
-    let hub = twin_hub::Hub::new();
+use std::net::SocketAddr;
+
+use twin_hub::{HubService, Store};
+
+#[tokio::main]
+async fn main() -> std::io::Result<()> {
+    let addr: SocketAddr = std::env::var("TWIN_HUB_ADDR")
+        .unwrap_or_else(|_| "127.0.0.1:8787".into())
+        .parse()
+        .expect("TWIN_HUB_ADDR must be host:port");
+    let db = std::env::var("TWIN_HUB_DB").unwrap_or_else(|_| "twin-hub.db".into());
+
+    let store = if db == ":memory:" {
+        None
+    } else {
+        Some(Store::open(&db).expect("open hub database"))
+    };
+    let service = HubService::new(store);
     println!(
-        "twin-hub {} — standalone mode (Phase 3); {} sessions",
+        "twin-hub {} listening on http://{addr} (db: {db}, {} sessions restored)",
         env!("CARGO_PKG_VERSION"),
-        hub.len()
+        service.sessions().len()
     );
+
+    // Housekeeping: stale-mark and prune once a minute.
+    let sweeper = service.clone();
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
+        loop {
+            tick.tick().await;
+            sweeper.sweep(chrono::Utc::now());
+        }
+    });
+
+    twin_hub::server::serve(service, addr).await
 }

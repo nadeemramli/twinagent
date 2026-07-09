@@ -1,49 +1,191 @@
 //! Session registry, persistence, and push to UI clients.
 //!
 //! Built as a library so the Tauri app embeds it directly (local-first
-//! default); the thin `twin-hub` binary target serves the Phase 3 standalone
-//! VPS deployment. SQLite + WebSocket arrive with TWI-7.
+//! default); the thin `twin-hub` binary serves the Phase 3 standalone VPS
+//! deployment. Collectors POST [`AgentSnapshot`]s in; UI clients hold a
+//! WebSocket and receive the full state once, then diffs.
 
-use std::collections::HashMap;
+pub mod registry;
+pub mod server;
+pub mod store;
 
+use std::sync::{Arc, Mutex};
+
+use chrono::{DateTime, Duration, Utc};
+use serde::{Deserialize, Serialize};
+use tokio::sync::broadcast;
 use twin_core::AgentSnapshot;
 
-/// In-memory session registry, keyed by `(machine, source, agent_id)`.
-#[derive(Debug, Default)]
-pub struct Hub {
-    sessions: HashMap<String, AgentSnapshot>,
+pub use registry::{session_key, Delta, Hub};
+pub use store::Store;
+
+/// Sessions silent for this long are flipped to stale by [`HubService::sweep`].
+pub const STALE_AFTER: Duration = Duration::minutes(30);
+/// Sessions silent for this long are dropped entirely.
+pub const RETENTION: Duration = Duration::hours(24);
+
+/// One message on the UI push channel.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Event {
+    /// Complete state — sent to each WebSocket client on connect.
+    Full { sessions: Vec<AgentSnapshot> },
+    /// A session appeared or changed.
+    Upsert {
+        key: String,
+        session: AgentSnapshot,
+        /// True on the edge into needs-you — the toast trigger.
+        entered_needs_you: bool,
+    },
+    /// A session aged out.
+    Removed { key: String },
 }
 
-impl Hub {
-    pub fn new() -> Self {
-        Self::default()
+struct Inner {
+    registry: Mutex<Hub>,
+    store: Option<Mutex<Store>>,
+    tx: broadcast::Sender<Event>,
+}
+
+/// The embeddable hub: registry + optional persistence + broadcast.
+///
+/// Clone freely — all clones share state.
+#[derive(Clone)]
+pub struct HubService {
+    inner: Arc<Inner>,
+}
+
+impl HubService {
+    /// Create a hub. With a store, previously persisted sessions are loaded
+    /// so the widget shows history immediately after a restart.
+    pub fn new(store: Option<Store>) -> Self {
+        let (tx, _) = broadcast::channel(256);
+        let mut registry = Hub::new();
+        if let Some(store) = &store {
+            if let Ok(sessions) = store.load_sessions() {
+                for snapshot in sessions {
+                    registry.upsert(snapshot);
+                }
+            }
+        }
+        Self {
+            inner: Arc::new(Inner {
+                registry: Mutex::new(registry),
+                store: store.map(Mutex::new),
+                tx,
+            }),
+        }
     }
 
-    fn key(snapshot: &AgentSnapshot) -> String {
-        format!(
-            "{}/{:?}/{}",
-            snapshot.machine, snapshot.source, snapshot.agent_id
-        )
+    /// Ingest one snapshot: update the registry and, if anything visible
+    /// changed, persist it and push a diff to subscribers.
+    pub fn ingest(&self, snapshot: AgentSnapshot) -> Delta {
+        let key = session_key(&snapshot);
+        let (delta, prev_status) = {
+            let mut registry = self.inner.registry.lock().unwrap();
+            let prev_status = registry.get(&key).map(|s| s.status);
+            (registry.upsert(snapshot.clone()), prev_status)
+        };
+        if delta == Delta::Unchanged {
+            return delta;
+        }
+
+        let status_changed = match delta {
+            Delta::New => true,
+            Delta::Updated { status_changed, .. } => status_changed,
+            Delta::Unchanged => unreachable!(),
+        };
+        if let Some(store) = &self.inner.store {
+            let store = store.lock().unwrap();
+            let _ = store.save_session(&snapshot);
+            if status_changed {
+                let _ = store.record_transition(
+                    &key,
+                    &snapshot.last_activity,
+                    prev_status.map(status_str).as_deref(),
+                    &status_str(snapshot.status),
+                );
+            }
+        }
+
+        let entered_needs_you = matches!(
+            delta,
+            Delta::Updated {
+                entered_needs_you: true,
+                ..
+            }
+        ) || (delta == Delta::New && snapshot.needs_user);
+        let _ = self.inner.tx.send(Event::Upsert {
+            key,
+            session: snapshot,
+            entered_needs_you,
+        });
+        delta
     }
 
-    /// Insert or update a session; returns true if this was a new session.
-    pub fn upsert(&mut self, snapshot: AgentSnapshot) -> bool {
-        self.sessions
-            .insert(Self::key(&snapshot), snapshot)
-            .is_none()
+    /// Periodic housekeeping: stale-mark silent sessions and drop expired
+    /// ones, pushing diffs for everything that changed.
+    pub fn sweep(&self, now: DateTime<Utc>) {
+        let (staled, pruned): (Vec<AgentSnapshot>, Vec<String>) = {
+            let mut registry = self.inner.registry.lock().unwrap();
+            let staled = registry
+                .mark_stale(now, STALE_AFTER)
+                .into_iter()
+                .filter_map(|key| registry.get(&key).cloned())
+                .collect();
+            let pruned = registry.prune(now, RETENTION);
+            (staled, pruned)
+        };
+
+        for snapshot in staled {
+            let key = session_key(&snapshot);
+            if let Some(store) = &self.inner.store {
+                let store = store.lock().unwrap();
+                let _ = store.save_session(&snapshot);
+                let _ = store.record_transition(
+                    &key,
+                    &now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                    None,
+                    &status_str(snapshot.status),
+                );
+            }
+            let _ = self.inner.tx.send(Event::Upsert {
+                key,
+                session: snapshot,
+                entered_needs_you: false,
+            });
+        }
+        for key in pruned {
+            if let Some(store) = &self.inner.store {
+                let _ = store.lock().unwrap().delete_session(&key);
+            }
+            let _ = self.inner.tx.send(Event::Removed { key });
+        }
     }
 
-    pub fn sessions(&self) -> impl Iterator<Item = &AgentSnapshot> {
-        self.sessions.values()
+    /// Current sessions, unordered.
+    pub fn sessions(&self) -> Vec<AgentSnapshot> {
+        self.inner
+            .registry
+            .lock()
+            .unwrap()
+            .sessions()
+            .cloned()
+            .collect()
     }
 
-    pub fn len(&self) -> usize {
-        self.sessions.len()
+    /// Subscribe to diffs. Slow readers that lag more than the channel
+    /// capacity miss events and should refetch the full state.
+    pub fn subscribe(&self) -> broadcast::Receiver<Event> {
+        self.inner.tx.subscribe()
     }
+}
 
-    pub fn is_empty(&self) -> bool {
-        self.sessions.is_empty()
-    }
+fn status_str(status: twin_core::AgentStatus) -> String {
+    serde_json::to_value(status)
+        .ok()
+        .and_then(|v| v.as_str().map(String::from))
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -51,15 +193,15 @@ mod tests {
     use super::*;
     use twin_core::{AgentSource, AgentStatus, UsageMetrics};
 
-    fn snapshot(id: &str) -> AgentSnapshot {
+    fn snapshot(id: &str, status: AgentStatus) -> AgentSnapshot {
         AgentSnapshot {
             agent_id: id.into(),
             source: AgentSource::ClaudeCode,
             machine: "wsl".into(),
             project: "demo".into(),
-            status: AgentStatus::Idle,
+            status,
             current_task: None,
-            needs_user: false,
+            needs_user: matches!(status, AgentStatus::NeedsYou),
             needs_user_reason: None,
             usage: UsageMetrics::default(),
             last_activity: "2026-07-10T09:00:00Z".into(),
@@ -68,11 +210,43 @@ mod tests {
     }
 
     #[test]
-    fn upsert_deduplicates_by_key() {
-        let mut hub = Hub::new();
-        assert!(hub.upsert(snapshot("a")));
-        assert!(!hub.upsert(snapshot("a")));
-        assert!(hub.upsert(snapshot("b")));
-        assert_eq!(hub.len(), 2);
+    fn ingest_broadcasts_diffs_and_persists_transitions() {
+        let service = HubService::new(Some(Store::open_in_memory().unwrap()));
+        let mut rx = service.subscribe();
+
+        service.ingest(snapshot("a", AgentStatus::Thinking));
+        service.ingest(snapshot("a", AgentStatus::NeedsYou));
+        // Unchanged snapshot: no event.
+        service.ingest(snapshot("a", AgentStatus::NeedsYou));
+
+        let Event::Upsert {
+            entered_needs_you: false,
+            ..
+        } = rx.try_recv().unwrap()
+        else {
+            panic!("expected initial upsert")
+        };
+        let Event::Upsert {
+            entered_needs_you: true,
+            key,
+            ..
+        } = rx.try_recv().unwrap()
+        else {
+            panic!("expected needs-you edge")
+        };
+        assert!(rx.try_recv().is_err(), "unchanged must not broadcast");
+        assert_eq!(key, "wsl/claude-code/a");
+    }
+
+    #[test]
+    fn warm_start_reloads_persisted_sessions() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hub.db");
+        {
+            let service = HubService::new(Some(Store::open(&path).unwrap()));
+            service.ingest(snapshot("a", AgentStatus::Done));
+        }
+        let service = HubService::new(Some(Store::open(&path).unwrap()));
+        assert_eq!(service.sessions().len(), 1);
     }
 }
