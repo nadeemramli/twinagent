@@ -4,6 +4,8 @@
 // hotkey) land with TWI-11/TWI-12.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod widget;
+
 use std::path::PathBuf;
 
 use tauri::Manager;
@@ -64,6 +66,16 @@ fn main() {
             });
 
             app.manage(hub);
+
+            // Pill placement: top-center of the remembered monitor, and
+            // keep remembering as the user drags it around (TWI-11).
+            let window = app
+                .get_webview_window("main")
+                .expect("main window exists");
+            widget::position_pill(&window, &data_dir);
+            widget::remember_monitor_on_move(&window, data_dir.clone());
+
+            widget::setup_tray(app)?;
             Ok(())
         })
         .run(tauri::generate_context!())
