@@ -6,11 +6,13 @@
 pub mod claude_code;
 pub mod codex;
 pub mod model;
+pub mod pipeline;
 pub mod tail;
 pub mod watch;
 
 pub use claude_code::ClaudeSessionTracker;
 pub use codex::CodexSessionTracker;
 pub use model::*;
+pub use pipeline::{Pipeline, SourceRoot};
 pub use tail::TailReader;
 pub use watch::{DirWatcher, FileEvent, FileEventKind};

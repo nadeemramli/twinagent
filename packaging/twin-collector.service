@@ -1,0 +1,25 @@
+# systemd user unit for the WSL collector daemon.
+# Install with packaging/install-collector.sh, or by hand:
+#   cp twin-collector.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now twin-collector
+#
+# Requires systemd in WSL ([boot] systemd=true in /etc/wsl.conf) and, for the
+# daemon to outlive your terminal sessions: loginctl enable-linger $USER
+
+[Unit]
+Description=Twinagent collector (watches ~/.claude and ~/.codex, pushes to the hub)
+# No network dependency: the hub may come up later; the collector buffers
+# with backoff until it does.
+
+[Service]
+ExecStart=%h/.local/bin/twin-collector
+Restart=always
+RestartSec=3
+Environment=TWIN_HUB_URL=http://127.0.0.1:8787
+Environment=TWIN_MACHINE=wsl
+# Uncomment to override the watched roots:
+# Environment=TWIN_CLAUDE_DIR=%h/.claude/projects
+# Environment=TWIN_CODEX_DIR=%h/.codex/sessions
+
+[Install]
+WantedBy=default.target
