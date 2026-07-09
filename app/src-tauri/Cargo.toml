@@ -12,4 +12,6 @@ twin-core.workspace = true
 twin-hub.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+chrono.workspace = true
+tokio.workspace = true
 tauri = { version = "2", features = ["tray-icon"] }

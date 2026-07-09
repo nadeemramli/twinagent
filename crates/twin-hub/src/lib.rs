@@ -5,6 +5,7 @@
 //! deployment. Collectors POST [`AgentSnapshot`]s in; UI clients hold a
 //! WebSocket and receive the full state once, then diffs.
 
+pub mod embedded;
 pub mod registry;
 pub mod server;
 pub mod store;
@@ -16,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 use twin_core::AgentSnapshot;
 
+pub use embedded::EmbeddedCollector;
 pub use registry::{session_key, Delta, Hub};
 pub use store::Store;
 
