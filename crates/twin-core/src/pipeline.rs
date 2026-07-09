@@ -170,6 +170,25 @@ impl Pipeline {
         out
     }
 
+    /// Machine-level Claude plan-window estimate, aggregated across every
+    /// tracked Claude session (TWI-16). Always tagged estimated; the widget
+    /// shows it next to Codex's exact `rate_limits` numbers.
+    pub fn claude_plan_estimate(
+        &self,
+        now: DateTime<Utc>,
+    ) -> crate::plan_usage::PlanEstimate {
+        let events: Vec<_> = self
+            .files
+            .values()
+            .filter_map(|s| match &s.tracker {
+                Tracker::Claude(t) => Some(t.usage_events()),
+                Tracker::Codex(_) => None,
+            })
+            .flatten()
+            .collect();
+        crate::plan_usage::estimate(&events, now)
+    }
+
     /// Everything currently tracked, evaluated now — for a full resend after
     /// the hub connection drops.
     pub fn all_snapshots(&self) -> Vec<AgentSnapshot> {

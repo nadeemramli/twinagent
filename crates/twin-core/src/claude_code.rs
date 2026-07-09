@@ -70,7 +70,8 @@ pub struct ClaudeSessionTracker {
     model: Option<String>,
     /// Usage keyed by API message id: streamed lines repeat the same message
     /// with cumulative usage, so the last write wins instead of summing.
-    usage_by_msg: HashMap<String, RawUsage>,
+    /// The timestamp feeds the plan-window estimator (TWI-16).
+    usage_by_msg: HashMap<String, (Option<DateTime<Utc>>, RawUsage)>,
     last_usage: RawUsage,
     pending_tools: HashMap<String, PendingTool>,
     todos: Vec<Todo>,
@@ -202,7 +203,7 @@ impl ClaudeSessionTracker {
             };
             self.last_usage = raw;
             if let Some(id) = message.get("id").and_then(Value::as_str) {
-                self.usage_by_msg.insert(id.to_string(), raw);
+                self.usage_by_msg.insert(id.to_string(), (ts, raw));
             }
         }
 
@@ -318,7 +319,7 @@ impl ClaudeSessionTracker {
     /// message.
     pub fn usage(&self) -> UsageMetrics {
         let mut total = RawUsage::default();
-        for u in self.usage_by_msg.values() {
+        for (_, u) in self.usage_by_msg.values() {
             total.input += u.input;
             total.output += u.output;
             total.cache_read += u.cache_read;
@@ -340,6 +341,25 @@ impl ClaudeSessionTracker {
             cache_creation_tokens: total.cache_creation,
             context_pct,
         }
+    }
+
+    /// Timestamped per-message usage, deduped — feed for the plan-window
+    /// estimator ([`crate::plan_usage::estimate`]).
+    pub fn usage_events(&self) -> Vec<(DateTime<Utc>, crate::plan_usage::TokenCounts)> {
+        self.usage_by_msg
+            .values()
+            .filter_map(|(ts, u)| {
+                Some((
+                    (*ts)?,
+                    crate::plan_usage::TokenCounts {
+                        input_tokens: u.input,
+                        output_tokens: u.output,
+                        cache_read_tokens: u.cache_read,
+                        cache_creation_tokens: u.cache_creation,
+                    },
+                ))
+            })
+            .collect()
     }
 
     /// Derive the session state as of `now` (heuristics documented on the
