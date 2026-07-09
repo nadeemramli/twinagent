@@ -92,7 +92,7 @@ class HubState {
 
 export const hub = new HubState();
 
-const HUB_WS = "ws://127.0.0.1:8787/v1/ws";
+const HUB_WS = "ws://127.0.0.1:17871/v1/ws";
 const RECONNECT_MIN_MS = 500;
 const RECONNECT_MAX_MS = 10_000;
 

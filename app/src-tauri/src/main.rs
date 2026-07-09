@@ -42,7 +42,7 @@ fn main() {
             // mirrored networking (or the host address otherwise — the
             // collector unit's TWIN_HUB_URL is the knob).
             let addr: std::net::SocketAddr = std::env::var("TWIN_HUB_ADDR")
-                .unwrap_or_else(|_| "127.0.0.1:8787".into())
+                .unwrap_or_else(|_| "127.0.0.1:17871".into())
                 .parse()?;
             let server_hub = hub.clone();
             tauri::async_runtime::spawn(async move {

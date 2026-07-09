@@ -11,7 +11,7 @@ use twin_core::{AgentSnapshot, SourceRoot, UsageReport};
 /// systemd unit is the single place to tweak it.
 #[derive(Debug, Clone)]
 pub struct Config {
-    /// Hub ingest endpoint, e.g. `http://127.0.0.1:8787`.
+    /// Hub ingest endpoint, e.g. `http://127.0.0.1:17871`.
     pub hub_url: String,
     /// Machine tag stamped on every snapshot (default `wsl`).
     pub machine: String,
@@ -32,7 +32,7 @@ impl Config {
             .unwrap_or_else(|_| PathBuf::from(&home).join(".codex/sessions"));
         Self {
             hub_url: std::env::var("TWIN_HUB_URL")
-                .unwrap_or_else(|_| "http://127.0.0.1:8787".into()),
+                .unwrap_or_else(|_| "http://127.0.0.1:17871".into()),
             machine: std::env::var("TWIN_MACHINE").unwrap_or_else(|_| "wsl".into()),
             roots: vec![SourceRoot::claude(claude), SourceRoot::codex(codex)],
         }
