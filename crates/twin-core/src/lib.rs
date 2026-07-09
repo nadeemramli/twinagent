@@ -5,6 +5,8 @@
 
 pub mod model;
 pub mod tail;
+pub mod watch;
 
 pub use model::*;
 pub use tail::TailReader;
+pub use watch::{DirWatcher, FileEvent, FileEventKind};
