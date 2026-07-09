@@ -4,5 +4,7 @@
 //! collector, and the Windows app core lives here.
 
 pub mod model;
+pub mod tail;
 
 pub use model::*;
+pub use tail::TailReader;
