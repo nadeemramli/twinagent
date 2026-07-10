@@ -33,6 +33,42 @@ struct WidgetConfig {
     monitor: Option<String>,
     /// Global toggle shortcut, e.g. `ctrl+shift+space`.
     hotkey: Option<String>,
+    /// Launch at login (TWI-15).
+    autostart: Option<bool>,
+    /// Toast on needs-you transitions (TWI-15; per-alert-type splits when
+    /// more alert types exist).
+    toasts: Option<bool>,
+    /// Hub bind port — applies on next launch (`TWIN_HUB_ADDR` still wins).
+    hub_port: Option<u16>,
+    /// Context-gauge tone boundaries: [elevated, high, critical] percent.
+    thresholds: Option<[u8; 3]>,
+}
+
+/// The user-facing settings view of the config — what the panel's settings
+/// pane edits (TWI-15). Window placement stays internal.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Settings {
+    pub hotkey: String,
+    pub autostart: bool,
+    pub toasts: bool,
+    pub hub_port: u16,
+    pub thresholds: [u8; 3],
+}
+
+impl From<&WidgetConfig> for Settings {
+    fn from(config: &WidgetConfig) -> Self {
+        Self {
+            hotkey: config.hotkey.clone().unwrap_or_else(|| DEFAULT_HOTKEY.into()),
+            autostart: config.autostart.unwrap_or(false),
+            toasts: config.toasts.unwrap_or(true),
+            hub_port: config.hub_port.unwrap_or(17871),
+            thresholds: config.thresholds.unwrap_or([50, 70, 90]),
+        }
+    }
+}
+
+pub fn load_settings(data_dir: &Path) -> Settings {
+    Settings::from(&load_config(data_dir))
 }
 
 fn config_path(data_dir: &Path) -> PathBuf {
@@ -150,6 +186,56 @@ pub fn setup_hotkey(app: &tauri::App, data_dir: &Path) -> tauri::Result<()> {
     Ok(())
 }
 
+#[tauri::command]
+pub fn get_settings(app: tauri::AppHandle) -> Result<Settings, String> {
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    Ok(load_settings(&data_dir))
+}
+
+/// Persist and apply settings. Hotkey, toasts, and autostart take effect
+/// immediately; the hub port applies on next launch.
+#[tauri::command]
+pub fn update_settings(app: tauri::AppHandle, settings: Settings) -> Result<(), String> {
+    let shortcut: Shortcut = settings
+        .hotkey
+        .parse()
+        .map_err(|_| format!("unparseable hotkey: {}", settings.hotkey))?;
+
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let mut config = load_config(&data_dir);
+    config.hotkey = Some(settings.hotkey.clone());
+    config.autostart = Some(settings.autostart);
+    config.toasts = Some(settings.toasts);
+    config.hub_port = Some(settings.hub_port);
+    config.thresholds = Some(settings.thresholds);
+    save_config(&data_dir, &config);
+
+    let shortcuts = app.global_shortcut();
+    let _ = shortcuts.unregister_all();
+    if let Err(err) = shortcuts.register(shortcut) {
+        eprintln!("twinagent: could not register hotkey {}: {err}", settings.hotkey);
+    }
+
+    apply_autostart(&app, settings.autostart);
+
+    app.state::<crate::notify::ToastsEnabled>()
+        .0
+        .store(settings.toasts, Ordering::Relaxed);
+    Ok(())
+}
+
+/// Converge the OS launch-at-login entry with the setting; disabling an
+/// entry that never existed is fine to ignore.
+pub fn apply_autostart(app: &tauri::AppHandle, enabled: bool) {
+    use tauri_plugin_autostart::ManagerExt;
+    let autolaunch = app.autolaunch();
+    let _ = if enabled {
+        autolaunch.enable()
+    } else {
+        autolaunch.disable()
+    };
+}
+
 /// Collapse when focus leaves the panel — the widget must never sit
 /// expanded over someone's work.
 pub fn collapse_on_blur(window: &WebviewWindow) {
@@ -167,7 +253,7 @@ pub fn collapse_on_blur(window: &WebviewWindow) {
 /// (arrives with TWI-15), quit.
 pub fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "show", "Show pill", true, None::<&str>)?;
-    let settings = MenuItem::with_id(app, "settings", "Settings", false, None::<&str>)?;
+    let settings = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Twinagent", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show, &settings, &quit])?;
 
@@ -180,6 +266,14 @@ pub fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.show();
                     let _ = window.set_focus();
+                }
+            }
+            "settings" => {
+                // Open the panel on its settings pane (TWI-15).
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    set_expanded(&window, true);
+                    let _ = window.emit("open-settings", ());
                 }
             }
             "quit" => app.exit(0),

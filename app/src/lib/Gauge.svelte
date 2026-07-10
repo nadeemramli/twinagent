@@ -1,11 +1,12 @@
 <script lang="ts">
   import { contextTone } from "./format";
+  import { settings } from "./settings.svelte";
 
   // A thin status meter. State is never color-alone: the percent is always
   // printed beside the track (dataviz status rule).
   let { pct, label = "context" }: { pct: number; label?: string } = $props();
   const clamped = $derived(Math.min(100, Math.max(0, pct)));
-  const tone = $derived(contextTone(clamped));
+  const tone = $derived(contextTone(clamped, settings.current.thresholds));
 </script>
 
 <div class="gauge" role="meter" aria-valuenow={Math.round(clamped)} aria-valuemin={0} aria-valuemax={100} aria-label={label}>

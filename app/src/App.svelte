@@ -3,10 +3,17 @@
   import { listen } from "@tauri-apps/api/event";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { hub, connectHub } from "./lib/hub.svelte";
+  import { settings } from "./lib/settings.svelte";
   import AgentCard from "./lib/AgentCard.svelte";
+  import Settings from "./lib/Settings.svelte";
   import UsageFooter from "./lib/UsageFooter.svelte";
 
   connectHub();
+  settings.load();
+
+  // Settings pane (TWI-15), opened from the tray menu.
+  let view = $state<"agents" | "settings">("agents");
+  listen("open-settings", () => (view = "settings"));
 
   // A slow clock for relative times and reset countdowns.
   let now = $state(Date.now());
@@ -15,7 +22,10 @@
   // Rust owns the expanded state (it owns the window size); the webview
   // mirrors it via the `panel` event.
   let expanded = $state(false);
-  listen<boolean>("panel", (e) => (expanded = e.payload));
+  listen<boolean>("panel", (e) => {
+    expanded = e.payload;
+    if (!expanded) view = "agents";
+  });
 
   function onKeydown(e: KeyboardEvent) {
     if (e.key === "Escape" && expanded) {
@@ -141,22 +151,26 @@
 
   {#if expanded}
     <section class="panel">
-      <div class="sessions">
-        {#if machines.length === 0}
-          <p class="empty">
-            No agents yet.
-            <span>Sessions appear here when Claude Code or Codex runs.</span>
-          </p>
-        {:else}
-          {#each machines as [machine, sessions] (machine)}
-            <h3 class="machine-header">{machine}</h3>
-            {#each sessions as session (`${session.source}/${session.agent_id}`)}
-              <AgentCard {session} {now} />
+      {#if view === "settings"}
+        <Settings onclose={() => (view = "agents")} />
+      {:else}
+        <div class="sessions">
+          {#if machines.length === 0}
+            <p class="empty">
+              No agents yet.
+              <span>Sessions appear here when Claude Code or Codex runs.</span>
+            </p>
+          {:else}
+            {#each machines as [machine, sessions] (machine)}
+              <h3 class="machine-header">{machine}</h3>
+              {#each sessions as session (`${session.source}/${session.agent_id}`)}
+                <AgentCard {session} {now} />
+              {/each}
             {/each}
-          {/each}
-        {/if}
-      </div>
-      <UsageFooter reports={usageReports} {now} />
+          {/if}
+        </div>
+        <UsageFooter reports={usageReports} {now} />
+      {/if}
     </section>
   {/if}
 </main>

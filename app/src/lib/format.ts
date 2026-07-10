@@ -36,10 +36,14 @@ export function projectName(path: string): string {
   return parts[parts.length - 1] ?? path;
 }
 
-/** AgentNotch context thresholds: green <50, yellow 50–70, orange 70–90, red >90. */
-export function contextTone(pct: number): "ok" | "elevated" | "high" | "critical" {
-  if (pct > 90) return "critical";
-  if (pct > 70) return "high";
-  if (pct > 50) return "elevated";
+/** AgentNotch context thresholds (default green <50, yellow 50–70, orange
+ * 70–90, red >90); boundaries are user-tunable via settings (TWI-15). */
+export function contextTone(
+  pct: number,
+  [elevated, high, critical]: [number, number, number] = [50, 70, 90],
+): "ok" | "elevated" | "high" | "critical" {
+  if (pct > critical) return "critical";
+  if (pct > high) return "high";
+  if (pct > elevated) return "elevated";
   return "ok";
 }

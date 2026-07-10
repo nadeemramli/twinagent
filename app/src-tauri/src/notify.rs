@@ -4,9 +4,10 @@
 //! spam the notification center.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 use tauri_plugin_notification::NotificationExt;
 use tokio::sync::broadcast::error::RecvError;
 use twin_hub::{Event, HubService};
@@ -14,6 +15,9 @@ use twin_hub::{Event, HubService};
 /// A session that flaps in and out of needs-you fires at most one toast
 /// per this window.
 const COOLDOWN: Duration = Duration::from_secs(120);
+
+/// Managed on/off switch, flipped live from the settings pane (TWI-15).
+pub struct ToastsEnabled(pub AtomicBool);
 
 pub fn spawn(app: AppHandle, hub: HubService) {
     let mut rx = hub.subscribe();
@@ -27,6 +31,9 @@ pub fn spawn(app: AppHandle, hub: HubService) {
                     entered_needs_you: true,
                     ..
                 }) => {
+                    if !app.state::<ToastsEnabled>().0.load(Ordering::Relaxed) {
+                        continue;
+                    }
                     let now = Instant::now();
                     if last_toast
                         .get(&logical_key)

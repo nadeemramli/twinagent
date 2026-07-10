@@ -89,7 +89,17 @@ fn set_panel(window: tauri::WebviewWindow, expanded: bool) {
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
-        .invoke_handler(tauri::generate_handler![toggle_panel, set_panel, jump::jump])
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
+        .invoke_handler(tauri::generate_handler![
+            toggle_panel,
+            set_panel,
+            jump::jump,
+            widget::get_settings,
+            widget::update_settings
+        ])
         .manage(widget::PanelState::default())
         .setup(|app| {
             // Hub state lives in the app data dir; history survives restarts.
@@ -98,13 +108,17 @@ fn main() {
             let store = Store::open(data_dir.join("twin-hub.db"))?;
             let hub = HubService::new(Some(store));
 
+            let settings = widget::load_settings(&data_dir);
+            app.manage(notify::ToastsEnabled(settings.toasts.into()));
+            widget::apply_autostart(app.handle(), settings.autostart);
+
             // Serve WebSocket + ingest for the widget UI and the WSL
             // collector. Loopback covers the UI and mirrored networking;
             // under NAT the collector reaches this host at the vEthernet
             // (WSL) adapter address, so we bind that too — and only that,
             // never 0.0.0.0: nothing here may be visible to the LAN.
             let addr: std::net::SocketAddr = std::env::var("TWIN_HUB_ADDR")
-                .unwrap_or_else(|_| "127.0.0.1:17871".into())
+                .unwrap_or_else(|_| format!("127.0.0.1:{}", settings.hub_port))
                 .parse()?;
             let server_hub = hub.clone();
             tauri::async_runtime::spawn(async move {
