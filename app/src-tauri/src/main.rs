@@ -4,6 +4,7 @@
 // hotkey) land with TWI-11/TWI-12.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod notify;
 mod widget;
 
 use std::path::PathBuf;
@@ -86,6 +87,7 @@ fn set_panel(window: tauri::WebviewWindow, expanded: bool) {
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![toggle_panel, set_panel])
         .manage(widget::PanelState::default())
         .setup(|app| {
@@ -115,6 +117,9 @@ fn main() {
             // Watch this machine's agent dirs in-process.
             let machine = if cfg!(windows) { "windows" } else { "linux" };
             let _collector = EmbeddedCollector::spawn(hub.clone(), machine, native_roots());
+
+            // Toast on needs-you transitions, whichever machine they're on.
+            notify::spawn(app.handle().clone(), hub.clone());
 
             // Housekeeping: stale-mark and prune once a minute.
             let sweeper = hub.clone();
