@@ -7,6 +7,8 @@ export interface Settings {
   hotkey: string;
   autostart: boolean;
   toasts: boolean;
+  /** Panel stays open on blur until explicitly dismissed. */
+  pinned: boolean;
   hub_port: number;
   /** Context-gauge tone boundaries: [elevated, high, critical] percent. */
   thresholds: [number, number, number];
@@ -16,6 +18,7 @@ export const DEFAULTS: Settings = {
   hotkey: "ctrl+shift+space",
   autostart: false,
   toasts: true,
+  pinned: true,
   hub_port: 17871,
   thresholds: [50, 70, 90],
 };

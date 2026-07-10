@@ -328,9 +328,8 @@ impl CodexSessionTracker {
         let Some(last) = self.last_activity else {
             return SessionState::Idle;
         };
-        if now - last >= STALE_SILENCE {
-            return SessionState::Stale;
-        }
+        // User-facing terminal states outrank stale (see claude_code):
+        // done/interrupted/needs-you wait for the user indefinitely.
         if self.interrupted {
             return SessionState::Interrupted;
         }
@@ -343,6 +342,9 @@ impl CodexSessionTracker {
         }
         if self.done && !self.turn_active {
             return SessionState::Done;
+        }
+        if now - last >= STALE_SILENCE {
+            return SessionState::Stale;
         }
         if let Some(reasoning) = self.last_reasoning {
             if now - reasoning <= THINKING_DECAY {

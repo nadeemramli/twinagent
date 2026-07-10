@@ -12,7 +12,8 @@
 //! - tool pending > 2.5 s without a result → needs-you (permission prompt).
 //! - `thinking` blocks → thinking, with a 3 s decay.
 //! - `stop_reason == "end_turn"` → done; `[Request interrupted by user` →
-//!   interrupted; ~10 s of silence → idle; very long silence → stale.
+//!   interrupted; ~10 s of silence → idle; very long mid-run silence →
+//!   stale (done/interrupted/needs-you wait for the user and never decay).
 
 use std::collections::HashMap;
 
@@ -370,9 +371,9 @@ impl ClaudeSessionTracker {
         };
         let silence = now - last;
 
-        if silence >= STALE_SILENCE {
-            return SessionState::Stale;
-        }
+        // States that wait on the user never decay to stale — a finished
+        // turn stays "done, your move" however long it sits. Stale is
+        // reserved for sessions that went silent mid-run (dead CLI).
         if self.interrupted {
             return SessionState::Interrupted;
         }
@@ -385,6 +386,9 @@ impl ClaudeSessionTracker {
         }
         if self.last_stop_reason.as_deref() == Some("end_turn") {
             return SessionState::Done;
+        }
+        if silence >= STALE_SILENCE {
+            return SessionState::Stale;
         }
         if let Some(thinking) = self.last_thinking {
             if now - thinking <= THINKING_DECAY {
@@ -556,8 +560,9 @@ mod tests {
         t.ingest_line(&line);
         // Done sticks past the idle threshold — the turn is over, not idle.
         assert_eq!(t.state_at(at(60)), SessionState::Done);
-        // ...but a dead-silent transcript eventually goes stale.
-        assert_eq!(t.state_at(at(60 * 60)), SessionState::Stale);
+        // ...and never decays to stale: it waits for the user's next
+        // prompt however long that takes.
+        assert_eq!(t.state_at(at(60 * 60)), SessionState::Done);
     }
 
     #[test]

@@ -87,10 +87,20 @@ impl Hub {
 
     /// Mark sessions silent for longer than `threshold` as [`AgentStatus::Stale`].
     /// Returns the keys that transitioned, for broadcasting.
+    ///
+    /// States that wait on the user (done, needs-you, failed) are exempt:
+    /// "finished an hour ago" is still done, not stale. Stale is for
+    /// sessions that went quiet mid-run.
     pub fn mark_stale(&mut self, now: DateTime<Utc>, threshold: Duration) -> Vec<String> {
         let mut changed = Vec::new();
         for (key, s) in &mut self.sessions {
-            if s.status == AgentStatus::Stale {
+            if matches!(
+                s.status,
+                AgentStatus::Stale
+                    | AgentStatus::Done
+                    | AgentStatus::NeedsYou
+                    | AgentStatus::Failed
+            ) {
                 continue;
             }
             let Ok(last) = DateTime::parse_from_rfc3339(&s.last_activity) else {
@@ -209,7 +219,9 @@ mod tests {
     #[test]
     fn stale_marking_and_pruning() {
         let mut hub = Hub::new();
-        hub.upsert(snapshot("a", AgentStatus::Done));
+        // Mid-run session goes stale; a done one waits for the user forever.
+        hub.upsert(snapshot("a", AgentStatus::Thinking));
+        hub.upsert(snapshot("b", AgentStatus::Done));
         let now = DateTime::parse_from_rfc3339("2026-07-10T10:00:00Z")
             .unwrap()
             .with_timezone(&Utc);
@@ -220,12 +232,17 @@ mod tests {
             hub.get(&staled[0]).unwrap().status,
             AgentStatus::Stale
         );
+        assert_eq!(
+            hub.get("wsl/claude-code/b").unwrap().status,
+            AgentStatus::Done,
+            "done never decays to stale"
+        );
         // Second sweep is quiet.
         assert!(hub.mark_stale(now, Duration::minutes(30)).is_empty());
 
         assert_eq!(hub.prune(now, Duration::hours(24)).len(), 0);
         let tomorrow = now + Duration::hours(25);
-        assert_eq!(hub.prune(tomorrow, Duration::hours(24)).len(), 1);
+        assert_eq!(hub.prune(tomorrow, Duration::hours(24)).len(), 2);
         assert!(hub.is_empty());
     }
 }

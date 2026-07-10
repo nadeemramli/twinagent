@@ -97,6 +97,7 @@ fn main() {
             toggle_panel,
             set_panel,
             jump::jump,
+            jump::focus_agent,
             widget::get_settings,
             widget::update_settings
         ])
@@ -110,6 +111,7 @@ fn main() {
 
             let settings = widget::load_settings(&data_dir);
             app.manage(notify::ToastsEnabled(settings.toasts.into()));
+            app.manage(widget::PinState(settings.pinned.into()));
             widget::apply_autostart(app.handle(), settings.autostart);
 
             // Serve WebSocket + ingest for the widget UI and the WSL

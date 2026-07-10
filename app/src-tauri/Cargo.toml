@@ -21,3 +21,4 @@ tauri-plugin-autostart = "2"
 
 [target."cfg(windows)".dependencies]
 if-addrs = "0.13"
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }

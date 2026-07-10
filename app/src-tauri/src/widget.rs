@@ -26,13 +26,22 @@ const DEFAULT_HOTKEY: &str = "ctrl+shift+space";
 #[derive(Default)]
 pub struct PanelState(AtomicBool);
 
+/// Whether the panel stays open when focus leaves it (managed app state,
+/// mirrors the persisted `pinned` setting).
+pub struct PinState(pub AtomicBool);
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 struct WidgetConfig {
     /// OS name of the monitor the pill lives on (e.g. `\\.\DISPLAY1`).
     monitor: Option<String>,
+    /// Last dragged position (physical px) — "put it aside" survives a
+    /// restart. When unset (or off-screen), fall back to top-center.
+    position: Option<(i32, i32)>,
     /// Global toggle shortcut, e.g. `ctrl+shift+space`.
     hotkey: Option<String>,
+    /// Panel stays open on blur until explicitly dismissed.
+    pinned: Option<bool>,
     /// Launch at login (TWI-15).
     autostart: Option<bool>,
     /// Toast on needs-you transitions (TWI-15; per-alert-type splits when
@@ -51,6 +60,7 @@ pub struct Settings {
     pub hotkey: String,
     pub autostart: bool,
     pub toasts: bool,
+    pub pinned: bool,
     pub hub_port: u16,
     pub thresholds: [u8; 3],
 }
@@ -61,6 +71,7 @@ impl From<&WidgetConfig> for Settings {
             hotkey: config.hotkey.clone().unwrap_or_else(|| DEFAULT_HOTKEY.into()),
             autostart: config.autostart.unwrap_or(false),
             toasts: config.toasts.unwrap_or(true),
+            pinned: config.pinned.unwrap_or(true),
             hub_port: config.hub_port.unwrap_or(17871),
             thresholds: config.thresholds.unwrap_or([50, 70, 90]),
         }
@@ -88,10 +99,28 @@ fn save_config(data_dir: &Path, config: &WidgetConfig) {
     }
 }
 
-/// Put the pill top-center on the remembered monitor (or wherever it is
-/// now, on first run).
+/// Restore the pill where the user last dragged it; without a saved (and
+/// still on-screen) position, top-center of the remembered monitor.
 pub fn position_pill(window: &WebviewWindow, data_dir: &Path) {
-    let saved = load_config(data_dir).monitor;
+    let config = load_config(data_dir);
+    if let Some((x, y)) = config.position {
+        let on_screen = window.available_monitors().is_ok_and(|monitors| {
+            monitors.iter().any(|m| {
+                let p = m.position();
+                let s = m.size();
+                // A little slack so "mostly on this monitor" counts.
+                x >= p.x - 50
+                    && x < p.x + s.width as i32
+                    && y >= p.y - 50
+                    && y < p.y + s.height as i32
+            })
+        });
+        if on_screen {
+            let _ = window.set_position(PhysicalPosition::new(x, y));
+            return;
+        }
+    }
+    let saved = config.monitor;
     let monitor = match (&saved, window.available_monitors()) {
         (Some(name), Ok(monitors)) => monitors
             .into_iter()
@@ -110,31 +139,41 @@ pub fn position_pill(window: &WebviewWindow, data_dir: &Path) {
     let _ = window.set_position(PhysicalPosition::new(x, y));
 }
 
-/// Persist the monitor whenever a drag ends somewhere new, so restarts
-/// bring the pill back to the same screen.
+/// Persist position + monitor as the user drags the pill around, so a
+/// restart puts it back exactly where they left it. Mid-drag writes are
+/// throttled; the final resting spot is flushed on blur.
 pub fn remember_monitor_on_move(window: &WebviewWindow, data_dir: PathBuf) {
     let tracked = window.clone();
-    let last: Mutex<Option<String>> = Mutex::new(load_config(&data_dir).monitor);
-    window.on_window_event(move |event| {
-        if !matches!(event, tauri::WindowEvent::Moved(_)) {
-            return;
+    let last_save: Mutex<std::time::Instant> =
+        Mutex::new(std::time::Instant::now() - std::time::Duration::from_secs(1));
+    window.on_window_event(move |event| match event {
+        tauri::WindowEvent::Moved(pos) => {
+            let mut last = last_save.lock().unwrap();
+            if last.elapsed() < std::time::Duration::from_millis(400) {
+                return;
+            }
+            *last = std::time::Instant::now();
+            persist_placement(&tracked, &data_dir, (pos.x, pos.y));
         }
-        let Ok(Some(monitor)) = tracked.current_monitor() else {
-            return;
-        };
-        let Some(name) = monitor.name().cloned() else {
-            return;
-        };
-        let mut last = last.lock().unwrap();
-        if last.as_deref() != Some(name.as_str()) {
-            *last = Some(name.clone());
-            // Load-modify-save so other settings (hotkey, and whatever
-            // TWI-15 adds) survive a monitor change.
-            let mut config = load_config(&data_dir);
-            config.monitor = Some(name);
-            save_config(&data_dir, &config);
+        tauri::WindowEvent::Focused(false) => {
+            if let Ok(pos) = tracked.outer_position() {
+                persist_placement(&tracked, &data_dir, (pos.x, pos.y));
+            }
         }
+        _ => {}
     });
+}
+
+/// Load-modify-save so unrelated settings survive a placement change.
+fn persist_placement(window: &WebviewWindow, data_dir: &Path, position: (i32, i32)) {
+    let mut config = load_config(data_dir);
+    config.position = Some(position);
+    if let Ok(Some(monitor)) = window.current_monitor() {
+        if let Some(name) = monitor.name() {
+            config.monitor = Some(name.clone());
+        }
+    }
+    save_config(data_dir, &config);
 }
 
 /// Switch between pill and panel (TWI-12). The window only grows downward
@@ -206,9 +245,14 @@ pub fn update_settings(app: tauri::AppHandle, settings: Settings) -> Result<(), 
     config.hotkey = Some(settings.hotkey.clone());
     config.autostart = Some(settings.autostart);
     config.toasts = Some(settings.toasts);
+    config.pinned = Some(settings.pinned);
     config.hub_port = Some(settings.hub_port);
     config.thresholds = Some(settings.thresholds);
     save_config(&data_dir, &config);
+
+    app.state::<PinState>()
+        .0
+        .store(settings.pinned, Ordering::Relaxed);
 
     let shortcuts = app.global_shortcut();
     let _ = shortcuts.unregister_all();
@@ -236,36 +280,58 @@ pub fn apply_autostart(app: &tauri::AppHandle, enabled: bool) {
     };
 }
 
-/// Collapse when focus leaves the panel — the widget must never sit
-/// expanded over someone's work.
+/// Collapse when focus leaves the panel — unless the user pinned it open
+/// (the default): then only Esc, the pill, or the hotkey dismiss it.
 pub fn collapse_on_blur(window: &WebviewWindow) {
     let tracked = window.clone();
     window.on_window_event(move |event| {
         if matches!(event, tauri::WindowEvent::Focused(false))
             && tracked.state::<PanelState>().0.load(Ordering::Relaxed)
+            && !tracked.state::<PinState>().0.load(Ordering::Relaxed)
         {
             set_expanded(&tracked, false);
         }
     });
 }
 
-/// Tray icon: the fallback surface. Left menu: show the pill, settings
-/// (arrives with TWI-15), quit.
+/// Tray icon: the fallback surface. Left-click brings the pill back;
+/// the menu adds hide/settings/quit.
 pub fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "show", "Show pill", true, None::<&str>)?;
+    let hide = MenuItem::with_id(app, "hide", "Hide pill", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Twinagent", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &settings, &quit])?;
+    let menu = Menu::with_items(app, &[&show, &hide, &settings, &quit])?;
 
     TrayIconBuilder::with_id("main")
         .icon(tray_icon())
         .tooltip("Twinagent — agent monitor")
         .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_tray_icon_event(|tray, event| {
+            // Left-click = bring the pill back (after "Hide pill").
+            if let tauri::tray::TrayIconEvent::Click {
+                button: tauri::tray::MouseButton::Left,
+                button_state: tauri::tray::MouseButtonState::Up,
+                ..
+            } = event
+            {
+                if let Some(window) = tray.app_handle().get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            }
+        })
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.show();
                     let _ = window.set_focus();
+                }
+            }
+            "hide" => {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.hide();
                 }
             }
             "settings" => {

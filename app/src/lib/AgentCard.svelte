@@ -17,18 +17,33 @@
     }).catch((err) => console.warn("jump failed:", err));
   }
 
+  // Clicking the card tries to focus whichever window hosts this agent —
+  // matched by project name in the window title (IDE windows and terminal
+  // tabs carry it). No match: quietly do nothing; the hover buttons can
+  // still open a fresh editor/terminal.
+  function focusAgent() {
+    invoke<boolean>("focus_agent", {
+      query: projectName(session.project),
+    }).catch((err) => console.warn("focus failed:", err));
+  }
+
   const STATUS_LABEL: Record<string, string> = {
     thinking: "thinking",
     tool_running: "running",
     needs_you: "needs you",
-    done: "done",
+    done: "done · waiting",
     failed: "failed",
     idle: "idle",
     stale: "stale",
   };
 </script>
 
-<article class="card" class:attention={session.needs_user}>
+<article
+  class="card"
+  class:attention={session.needs_user}
+  onclick={focusAgent}
+  title="Click to focus this agent's window"
+>
   <header>
     <span class="status {session.status}">
       <span class="status-dot"></span>{STATUS_LABEL[session.status] ?? session.status}
@@ -40,8 +55,22 @@
     <span class="source">{session.source === "claude-code" ? "claude" : session.source}</span>
     {#if session.jump?.type === "terminal"}
       <span class="jumps">
-        <button class="jump" title="Open in VS Code" onclick={() => jump("code")}>‹›</button>
-        <button class="jump" title="Open terminal here" onclick={() => jump("terminal")}>❯_</button>
+        <button
+          class="jump"
+          title="Open in VS Code"
+          onclick={(e) => {
+            e.stopPropagation();
+            jump("code");
+          }}>‹›</button
+        >
+        <button
+          class="jump"
+          title="Open terminal here"
+          onclick={(e) => {
+            e.stopPropagation();
+            jump("terminal");
+          }}>❯_</button
+        >
       </span>
     {/if}
   </header>
@@ -75,6 +104,11 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
+    cursor: pointer;
+  }
+
+  .card:hover {
+    background: rgba(255, 255, 255, 0.055);
   }
 
   .card.attention {
@@ -119,8 +153,9 @@
     color: #f0442c;
   }
 
+  /* Done pops (it's the "your turn" signal), unlike idle/stale gray. */
   .status.done {
-    color: #8a8f98;
+    color: #7cb0fa;
   }
 
   .status.idle,

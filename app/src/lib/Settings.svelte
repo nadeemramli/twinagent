@@ -45,6 +45,11 @@
   </label>
 
   <label class="row">
+    <span>Keep panel open <small>(until Esc, hotkey, or pill click)</small></span>
+    <input type="checkbox" bind:checked={draft.pinned} />
+  </label>
+
+  <label class="row">
     <span>Toggle hotkey</span>
     <input class="text" type="text" bind:value={draft.hotkey} spellcheck="false" />
   </label>
