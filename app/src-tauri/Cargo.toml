@@ -16,3 +16,6 @@ chrono.workspace = true
 tokio.workspace = true
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-global-shortcut = "2"
+
+[target."cfg(windows)".dependencies]
+if-addrs = "0.13"

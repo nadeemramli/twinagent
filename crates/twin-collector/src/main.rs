@@ -17,10 +17,10 @@ use twin_core::Pipeline;
 fn main() {
     let config = Config::from_env();
     println!(
-        "twin-collector {} — machine: {}, hub: {}, roots: {:?}",
+        "twin-collector {} — machine: {}, hub candidates: {:?}, roots: {:?}",
         env!("CARGO_PKG_VERSION"),
         config.machine,
-        config.hub_url,
+        config.hub_urls,
         config
             .roots
             .iter()
@@ -33,7 +33,7 @@ fn main() {
         config.roots.clone(),
         Duration::from_secs(5),
     );
-    let mut forwarder = Forwarder::new(&config.hub_url);
+    let mut forwarder = Forwarder::new(&config.hub_urls);
 
     let usage_cadence = Duration::from_secs(30);
     let mut next_usage = std::time::Instant::now();

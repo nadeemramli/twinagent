@@ -28,6 +28,52 @@ fn native_roots() -> Vec<SourceRoot> {
     ]
 }
 
+/// Second hub listener on the `vEthernet (WSL)` adapter, so the WSL
+/// collector can reach us under NAT networking. The adapter exists only
+/// while the WSL VM runs and gets a fresh subnet each time it starts, so
+/// poll for it and rebind whenever its address changes.
+#[cfg(windows)]
+fn spawn_wsl_facing_server(hub: twin_hub::HubService, port: u16) {
+    fn wsl_adapter_ip() -> Option<std::net::IpAddr> {
+        if_addrs::get_if_addrs()
+            .ok()?
+            .into_iter()
+            .find(|iface| iface.name.contains("WSL") && iface.ip().is_ipv4())
+            .map(|iface| iface.ip())
+    }
+
+    tauri::async_runtime::spawn(async move {
+        let poll = std::time::Duration::from_secs(30);
+        loop {
+            let Some(ip) = wsl_adapter_ip() else {
+                tokio::time::sleep(poll).await;
+                continue;
+            };
+            let addr = std::net::SocketAddr::from((ip, port));
+            let server = twin_hub::server::serve(hub.clone(), addr);
+            tokio::pin!(server);
+            loop {
+                tokio::select! {
+                    result = &mut server => {
+                        if let Err(err) = result {
+                            eprintln!("twinagent: WSL-facing hub server on {addr} exited: {err}");
+                        }
+                        tokio::time::sleep(poll).await;
+                        break;
+                    }
+                    _ = tokio::time::sleep(poll) => {
+                        // WSL restarted onto a new subnet? Drop the stale
+                        // listener and rebind on the new address.
+                        if wsl_adapter_ip() != Some(ip) {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
+
 #[tauri::command]
 fn toggle_panel(window: tauri::WebviewWindow) {
     widget::toggle_panel(&window);
@@ -50,9 +96,10 @@ fn main() {
             let hub = HubService::new(Some(store));
 
             // Serve WebSocket + ingest for the widget UI and the WSL
-            // collector. 127.0.0.1 only; WSL reaches it via localhost under
-            // mirrored networking (or the host address otherwise — the
-            // collector unit's TWIN_HUB_URL is the knob).
+            // collector. Loopback covers the UI and mirrored networking;
+            // under NAT the collector reaches this host at the vEthernet
+            // (WSL) adapter address, so we bind that too — and only that,
+            // never 0.0.0.0: nothing here may be visible to the LAN.
             let addr: std::net::SocketAddr = std::env::var("TWIN_HUB_ADDR")
                 .unwrap_or_else(|_| "127.0.0.1:17871".into())
                 .parse()?;
@@ -62,6 +109,8 @@ fn main() {
                     eprintln!("twinagent: hub server exited: {err}");
                 }
             });
+            #[cfg(windows)]
+            spawn_wsl_facing_server(hub.clone(), addr.port());
 
             // Watch this machine's agent dirs in-process.
             let machine = if cfg!(windows) { "windows" } else { "linux" };

@@ -15,7 +15,9 @@ Description=Twinagent collector (watches ~/.claude and ~/.codex, pushes to the h
 ExecStart=%h/.local/bin/twin-collector
 Restart=always
 RestartSec=3
-Environment=TWIN_HUB_URL=http://127.0.0.1:17871
+# Hub endpoint autodetects: localhost first (mirrored networking), then the
+# Windows host via the default gateway (NAT networking). Uncomment to pin:
+# Environment=TWIN_HUB_URL=http://127.0.0.1:17871
 Environment=TWIN_MACHINE=wsl
 # Uncomment to override the watched roots:
 # Environment=TWIN_CLAUDE_DIR=%h/.claude/projects
