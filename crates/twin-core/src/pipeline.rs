@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 
@@ -70,12 +70,20 @@ struct FileSession {
     last_emitted: Option<AgentSnapshot>,
 }
 
+/// Time-decay transitions (idle after silence, tool pending > 2.5s) only
+/// need coarse resolution; sweeping every tracked session more often than
+/// this burns a core for nothing while an active agent writes its
+/// transcript many times a second (TWI-23).
+const SWEEP_INTERVAL: Duration = Duration::from_millis(500);
+
 /// Watches a set of roots and turns transcript activity into snapshots.
 pub struct Pipeline {
     machine: String,
     roots: Vec<SourceRoot>,
     watcher: DirWatcher,
     files: HashMap<PathBuf, FileSession>,
+    /// When the last full snapshot sweep ran.
+    last_sweep: Option<Instant>,
 }
 
 impl Pipeline {
@@ -91,6 +99,7 @@ impl Pipeline {
             roots,
             watcher,
             files: HashMap::new(),
+            last_sweep: None,
         }
     }
 
@@ -117,6 +126,7 @@ impl Pipeline {
     /// ingest new lines, and return a snapshot for every session whose
     /// visible state changed — including pure time-decay transitions.
     pub fn poll(&mut self, wait: Duration) -> Vec<AgentSnapshot> {
+        let mut dirty: Vec<PathBuf> = Vec::new();
         for event in self.watcher.poll(wait) {
             if Self::is_subagent_file(&event.path) {
                 continue;
@@ -137,16 +147,33 @@ impl Pipeline {
                     last_emitted: None,
                 }
             });
+            dirty.push(event.path);
         }
+
+        // Tail only the files that actually changed — an active agent
+        // writes its transcript many times a second, and reopening every
+        // tracked file on each write is what burned a core (TWI-23).
+        for path in &dirty {
+            if let Some(session) = self.files.get_mut(path) {
+                if let Ok(lines) = session.reader.poll() {
+                    for line in &lines {
+                        session.tracker.ingest_line(line);
+                    }
+                }
+            }
+        }
+
+        // The full sweep exists for time-decay transitions; cap its rate no
+        // matter how fast events arrive. Lines ingested above surface on
+        // the next due sweep, at most SWEEP_INTERVAL away.
+        if self.last_sweep.is_some_and(|t| t.elapsed() < SWEEP_INTERVAL) {
+            return Vec::new();
+        }
+        self.last_sweep = Some(Instant::now());
 
         let now = Utc::now();
         let mut out = Vec::new();
         for session in self.files.values_mut() {
-            if let Ok(lines) = session.reader.poll() {
-                for line in &lines {
-                    session.tracker.ingest_line(line);
-                }
-            }
             let snapshot = session.tracker.snapshot(&self.machine, now);
             // Skip files that produced no session yet (empty/foreign files).
             if snapshot.agent_id == "unknown" && snapshot.last_activity.is_empty() {
