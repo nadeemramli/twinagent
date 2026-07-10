@@ -10,23 +10,42 @@ fn wsl_distro() -> String {
     std::env::var("TWIN_WSL_DISTRO").unwrap_or_else(|_| "Ubuntu".into())
 }
 
-/// Best-effort focus of the window hosting an agent: the first visible
-/// top-level window whose title contains `query` (IDE windows and terminal
-/// tabs usually carry the project folder name). Returns false when nothing
-/// matched, so the UI can fall back to doing nothing rather than guessing.
+/// Best-effort focus of the window hosting an agent: visible top-level
+/// windows whose title contains `query` (IDE windows and terminal tabs
+/// usually carry the project folder name), scored by whether the title
+/// looks like the right side of the machine — the same repo exists in both
+/// WSL and Windows, so "first match" would happily focus the wrong tab.
+/// Returns false when nothing matched.
 #[tauri::command]
-pub fn focus_agent(query: String) -> bool {
+pub fn focus_agent(query: String, machine: String) -> bool {
     #[cfg(windows)]
-    return focus_matching_window(&query);
+    return focus_matching_window(&query, &machine);
     #[cfg(not(windows))]
     {
-        let _ = query;
+        let _ = (query, machine);
         false
     }
 }
 
+/// Positive = looks like a WSL-side window, negative = Windows-side.
 #[cfg(windows)]
-fn focus_matching_window(query: &str) -> bool {
+fn wsl_leaning(title: &str) -> i32 {
+    let mut score = 0;
+    for marker in ["wsl", "ubuntu", "/home/", "~/", "~ "] {
+        if title.contains(marker) {
+            score += 2;
+        }
+    }
+    for marker in ["c:\\", "d:\\", "powershell", "cmd.exe"] {
+        if title.contains(marker) {
+            score -= 2;
+        }
+    }
+    score
+}
+
+#[cfg(windows)]
+fn focus_matching_window(query: &str, machine: &str) -> bool {
     use windows_sys::Win32::Foundation::{HWND, LPARAM};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GetWindowTextLengthW, GetWindowTextW, IsIconic, IsWindowVisible,
@@ -35,7 +54,7 @@ fn focus_matching_window(query: &str) -> bool {
 
     struct Search {
         needle: String,
-        found: HWND,
+        matches: Vec<(HWND, String)>,
     }
 
     unsafe extern "system" fn visit(hwnd: HWND, lparam: LPARAM) -> i32 {
@@ -50,10 +69,9 @@ fn focus_matching_window(query: &str) -> bool {
         let mut buf = vec![0u16; len as usize + 1];
         let read = GetWindowTextW(hwnd, buf.as_mut_ptr(), buf.len() as i32);
         let title = String::from_utf16_lossy(&buf[..read.max(0) as usize]).to_lowercase();
-        // Skip our own pill window.
+        // Skip our own pill window; keep collecting all other matches.
         if title.contains(&search.needle) && title != "twinagent" {
-            search.found = hwnd;
-            return 0; // stop enumerating
+            search.matches.push((hwnd, title));
         }
         1
     }
@@ -64,17 +82,30 @@ fn focus_matching_window(query: &str) -> bool {
     }
     let mut search = Search {
         needle,
-        found: std::ptr::null_mut(),
+        matches: Vec::new(),
     };
     unsafe {
         EnumWindows(Some(visit), &mut search as *mut Search as LPARAM);
-        if search.found.is_null() {
-            return false;
+    }
+
+    // Highest machine-agreement wins; ties go to the earlier (higher
+    // z-order) window, so strictly-greater only.
+    let want_wsl = machine != "windows";
+    let mut best: Option<(HWND, i32)> = None;
+    for (hwnd, title) in search.matches {
+        let leaning = wsl_leaning(&title);
+        let score = if want_wsl { leaning } else { -leaning };
+        if best.is_none_or(|(_, s)| score > s) {
+            best = Some((hwnd, score));
         }
-        if IsIconic(search.found) != 0 {
-            ShowWindow(search.found, SW_RESTORE);
+    }
+
+    let Some((hwnd, _)) = best else { return false };
+    unsafe {
+        if IsIconic(hwnd) != 0 {
+            ShowWindow(hwnd, SW_RESTORE);
         }
-        SetForegroundWindow(search.found) != 0
+        SetForegroundWindow(hwnd) != 0
     }
 }
 

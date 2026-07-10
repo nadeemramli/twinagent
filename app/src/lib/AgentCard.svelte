@@ -24,6 +24,7 @@
   function focusAgent() {
     invoke<boolean>("focus_agent", {
       query: projectName(session.project),
+      machine: session.machine,
     }).catch((err) => console.warn("focus failed:", err));
   }
 
