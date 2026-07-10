@@ -92,12 +92,11 @@ pub fn remember_monitor_on_move(window: &WebviewWindow, data_dir: PathBuf) {
         let mut last = last.lock().unwrap();
         if last.as_deref() != Some(name.as_str()) {
             *last = Some(name.clone());
-            save_config(
-                &data_dir,
-                &WidgetConfig {
-                    monitor: Some(name),
-                },
-            );
+            // Load-modify-save so other settings (hotkey, and whatever
+            // TWI-15 adds) survive a monitor change.
+            let mut config = load_config(&data_dir);
+            config.monitor = Some(name);
+            save_config(&data_dir, &config);
         }
     });
 }
