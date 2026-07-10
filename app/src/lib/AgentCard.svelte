@@ -41,7 +41,12 @@
 <article
   class="card"
   class:attention={session.needs_user}
+  role="button"
+  tabindex="0"
   onclick={focusAgent}
+  onkeydown={(e) => {
+    if (e.key === "Enter" || e.key === " ") focusAgent();
+  }}
   title="Click to focus this agent's window"
 >
   <header>
