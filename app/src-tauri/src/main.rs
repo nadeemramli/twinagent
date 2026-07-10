@@ -4,6 +4,7 @@
 // hotkey) land with TWI-11/TWI-12.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod jump;
 mod notify;
 mod widget;
 
@@ -88,7 +89,7 @@ fn set_panel(window: tauri::WebviewWindow, expanded: bool) {
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
-        .invoke_handler(tauri::generate_handler![toggle_panel, set_panel])
+        .invoke_handler(tauri::generate_handler![toggle_panel, set_panel, jump::jump])
         .manage(widget::PanelState::default())
         .setup(|app| {
             // Hub state lives in the app data dir; history survives restarts.

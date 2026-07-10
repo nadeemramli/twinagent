@@ -1,9 +1,21 @@
 <script lang="ts">
+  import { invoke } from "@tauri-apps/api/core";
   import type { AgentSnapshot } from "./hub.svelte";
   import { ago, compact, projectName } from "./format";
   import Gauge from "./Gauge.svelte";
 
   let { session, now }: { session: AgentSnapshot; now: number } = $props();
+
+  // Click-to-jump (TWI-18): both actions derive from the session's cwd;
+  // the Rust side translates WSL paths to UNC / vscode-remote forms.
+  function jump(app: "code" | "terminal") {
+    if (session.jump?.type !== "terminal") return;
+    invoke("jump", {
+      app,
+      machine: session.machine,
+      dir: session.jump.target,
+    }).catch((err) => console.warn("jump failed:", err));
+  }
 
   const STATUS_LABEL: Record<string, string> = {
     thinking: "thinking",
@@ -26,6 +38,12 @@
       <span class="branch" title="git branch">{session.git_branch}</span>
     {/if}
     <span class="source">{session.source === "claude-code" ? "claude" : session.source}</span>
+    {#if session.jump?.type === "terminal"}
+      <span class="jumps">
+        <button class="jump" title="Open in VS Code" onclick={() => jump("code")}>‹›</button>
+        <button class="jump" title="Open terminal here" onclick={() => jump("terminal")}>❯_</button>
+      </span>
+    {/if}
   </header>
 
   {#if session.current_task}
@@ -137,6 +155,35 @@
     font-size: 10.5px;
     color: #565b64;
     flex: none;
+  }
+
+  .jumps {
+    display: inline-flex;
+    gap: 4px;
+    flex: none;
+    opacity: 0;
+    transition: opacity 0.12s ease;
+  }
+
+  .card:hover .jumps {
+    opacity: 1;
+  }
+
+  .jump {
+    font: inherit;
+    font-size: 10px;
+    line-height: 1;
+    color: #8a8f98;
+    background: rgba(255, 255, 255, 0.06);
+    border: none;
+    border-radius: 6px;
+    padding: 3px 6px;
+    cursor: pointer;
+  }
+
+  .jump:hover {
+    color: #dee1e6;
+    background: rgba(255, 255, 255, 0.12);
   }
 
   .task {
