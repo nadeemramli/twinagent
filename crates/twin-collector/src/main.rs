@@ -12,7 +12,7 @@
 use std::time::Duration;
 
 use twin_collector::{Config, Forwarder};
-use twin_core::Pipeline;
+use twin_core::{ClaudePlanPoller, Pipeline};
 
 fn main() {
     let config = Config::from_env();
@@ -34,6 +34,9 @@ fn main() {
         Duration::from_secs(5),
     );
     let mut forwarder = Forwarder::new(&config.hub_urls);
+    // Exact account-level Claude windows via the user's own OAuth token;
+    // internally rate-limited, so ticking every usage cadence is fine.
+    let mut plan_poller = ClaudePlanPoller::new(config.claude_creds.clone());
 
     let usage_cadence = Duration::from_secs(30);
     let mut next_usage = std::time::Instant::now();
@@ -44,7 +47,10 @@ fn main() {
 
         // Plan usage on a fixed cadence; the hub dedupes unchanged reports.
         if std::time::Instant::now() >= next_usage {
-            forwarder.send_usage(pipeline.usage_report(chrono::Utc::now()));
+            let now = chrono::Utc::now();
+            let mut report = pipeline.usage_report(now);
+            report.claude_exact = plan_poller.tick(now);
+            forwarder.send_usage(report);
             next_usage = std::time::Instant::now() + usage_cadence;
         }
     }

@@ -229,11 +229,14 @@ impl Pipeline {
     }
 
     /// Machine-level usage report for the hub: exact Codex windows plus the
-    /// estimated Claude windows, in one envelope.
+    /// estimated Claude windows, in one envelope. The exact Claude reading
+    /// (`claude_exact`) is filled in by the collector's OAuth poller — the
+    /// pipeline itself stays HTTP-free.
     pub fn usage_report(&self, now: DateTime<Utc>) -> crate::model::UsageReport {
         crate::model::UsageReport {
             machine: self.machine.clone(),
             claude: Some(self.claude_plan_estimate(now)),
+            claude_exact: None,
             codex: self.codex_rate_limits(),
             reported_at: now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
         }

@@ -1,11 +1,25 @@
 <script lang="ts">
-  import type { UsageReport } from "./hub.svelte";
+  import type { ClaudePlanWindows, UsageReport } from "./hub.svelte";
   import { compact, resetsIn } from "./format";
 
   // Plan usage per machine. Codex numbers are exact percentages and get
   // bars; the Claude estimate has no known cap, so it shows token counts —
   // never dressed up as a percentage it isn't (TWI-16/17 confidence rule).
+  // When the OAuth usage endpoint gives an exact Claude reading, that one
+  // gets bars too and the estimate rows stand down.
   let { reports, now }: { reports: UsageReport[]; now: number } = $props();
+
+  // The exact Claude reading is account-level, so machines may duplicate
+  // it — newest observation wins, rendered once.
+  const claudeExact = $derived.by(() => {
+    let best: ClaudePlanWindows | null = null;
+    for (const r of reports) {
+      if (r.claude_exact && (!best || r.claude_exact.observed_at > best.observed_at)) {
+        best = r.claude_exact;
+      }
+    }
+    return best;
+  });
 
   function barTone(pct: number): string {
     if (pct > 90) return "critical";
@@ -15,11 +29,41 @@
   }
 </script>
 
-{#if reports.length > 0}
+{#snippet exactWindow(label: string, win: { used_percent: number; resets_at: string | null })}
+  <div class="window">
+    <span class="win-label">{label}</span>
+    <span class="bar"><span class="bar-fill {barTone(win.used_percent)}" style:width="{Math.min(100, win.used_percent)}%"></span></span>
+    <span class="pct">{Math.round(win.used_percent)}%</span>
+    {#if win.resets_at}<span class="resets">{resetsIn(Date.parse(win.resets_at), now)}</span>{/if}
+  </div>
+{/snippet}
+
+{#if reports.length > 0 || claudeExact}
   <section class="usage">
     <h3>Plan usage</h3>
+    {#if claudeExact}
+      <div class="machine">
+        <span class="machine-tag">account</span>
+        <div class="row">
+          <span class="who">
+            claude
+            <span class="confidence exact">exact</span>
+          </span>
+          <div class="windows">
+            {@render exactWindow("5h", claudeExact.five_hour)}
+            {@render exactWindow("week", claudeExact.seven_day)}
+            {#if claudeExact.seven_day_opus}
+              {@render exactWindow("opus", claudeExact.seven_day_opus)}
+            {/if}
+            {#if claudeExact.seven_day_sonnet}
+              {@render exactWindow("sonnet", claudeExact.seven_day_sonnet)}
+            {/if}
+          </div>
+        </div>
+      </div>
+    {/if}
     {#each reports as report (report.machine)}
-      {#if report.codex?.primary || report.claude}
+      {#if report.codex?.primary || (report.claude && !claudeExact)}
         <div class="machine">
           <span class="machine-tag">{report.machine}</span>
           {#if report.codex?.primary}
@@ -48,7 +92,7 @@
               </div>
             </div>
           {/if}
-          {#if report.claude}
+          {#if report.claude && !claudeExact}
             {@const c = report.claude}
             <div class="row">
               <span class="who">
@@ -164,7 +208,7 @@
 
   .win-label {
     flex: none;
-    width: 30px;
+    width: 40px;
     font-size: 10.5px;
     color: #565b64;
   }

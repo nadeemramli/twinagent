@@ -19,6 +19,8 @@ pub struct Config {
     /// Machine tag stamped on every snapshot (default `wsl`).
     pub machine: String,
     pub roots: Vec<SourceRoot>,
+    /// Claude Code credentials file for the exact-usage poller.
+    pub claude_creds: PathBuf,
 }
 
 impl Config {
@@ -40,6 +42,9 @@ impl Config {
             },
             machine: std::env::var("TWIN_MACHINE").unwrap_or_else(|_| "wsl".into()),
             roots: vec![SourceRoot::claude(claude), SourceRoot::codex(codex)],
+            claude_creds: std::env::var("TWIN_CLAUDE_CREDS")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| twin_core::ClaudePlanPoller::default_creds_path()),
         }
     }
 }

@@ -31,6 +31,10 @@ impl EmbeddedCollector {
             .name("twin-embedded-collector".into())
             .spawn(move || {
                 let mut pipeline = Pipeline::new(machine, roots, Duration::from_secs(5));
+                // Exact Claude plan windows from this machine's own Claude
+                // Code credentials (internally rate-limited).
+                let mut plan_poller =
+                    twin_core::ClaudePlanPoller::new(twin_core::ClaudePlanPoller::default_creds_path());
                 let usage_cadence = Duration::from_secs(30);
                 let mut next_usage = std::time::Instant::now();
                 while !stop_flag.load(Ordering::Relaxed) {
@@ -40,7 +44,10 @@ impl EmbeddedCollector {
                     // Plan usage on a fixed cadence; the hub dedupes
                     // unchanged reports.
                     if std::time::Instant::now() >= next_usage {
-                        service.report_usage(pipeline.usage_report(chrono::Utc::now()));
+                        let now = chrono::Utc::now();
+                        let mut report = pipeline.usage_report(now);
+                        report.claude_exact = plan_poller.tick(now);
+                        service.report_usage(report);
                         next_usage = std::time::Instant::now() + usage_cadence;
                     }
                 }

@@ -8,7 +8,7 @@ publish.workspace = true
 twin-core.workspace = true
 serde_json.workspace = true
 chrono.workspace = true
-ureq = { version = "2", features = ["json"] }
+ureq.workspace = true
 
 [dev-dependencies]
 twin-hub.workspace = true

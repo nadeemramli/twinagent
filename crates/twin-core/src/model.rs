@@ -145,6 +145,11 @@ pub struct UsageReport {
     /// Machine tag, same vocabulary as [`AgentSnapshot::machine`].
     pub machine: String,
     pub claude: Option<crate::plan_usage::PlanEstimate>,
+    /// Exact account-level Claude windows from the OAuth usage endpoint —
+    /// present when this machine's poller has a fresh reading. Preferred
+    /// over `claude` (the JSONL estimate) whenever available.
+    #[serde(default)]
+    pub claude_exact: Option<crate::claude_plan_api::ClaudePlanWindows>,
     pub codex: Option<crate::codex::RateLimits>,
     /// RFC 3339 timestamp of when the report was assembled.
     pub reported_at: String,

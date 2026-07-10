@@ -69,9 +69,26 @@ export interface RateLimits {
   observed_at: string | null;
 }
 
+/// One exact plan window from the OAuth usage endpoint.
+export interface PlanWindow {
+  used_percent: number;
+  resets_at: string | null;
+}
+
+/// Exact account-level Claude plan usage — server-side percentages and
+/// real reset times, same data as Claude Code's /usage command.
+export interface ClaudePlanWindows {
+  five_hour: PlanWindow;
+  seven_day: PlanWindow;
+  seven_day_opus: PlanWindow | null;
+  seven_day_sonnet: PlanWindow | null;
+  observed_at: string;
+}
+
 export interface UsageReport {
   machine: string;
   claude: PlanEstimate | null;
+  claude_exact: ClaudePlanWindows | null;
   codex: RateLimits | null;
   reported_at: string;
 }

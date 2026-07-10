@@ -4,6 +4,7 @@
 //! collector, and the Windows app core lives here.
 
 pub mod claude_code;
+pub mod claude_plan_api;
 pub mod codex;
 pub mod model;
 pub mod pipeline;
@@ -12,6 +13,7 @@ pub mod tail;
 pub mod watch;
 
 pub use claude_code::ClaudeSessionTracker;
+pub use claude_plan_api::{ClaudePlanPoller, ClaudePlanWindows, PlanWindow};
 pub use codex::CodexSessionTracker;
 pub use model::*;
 pub use pipeline::{Pipeline, SourceRoot};

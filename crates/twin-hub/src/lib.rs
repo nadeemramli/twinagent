@@ -204,7 +204,9 @@ impl HubService {
         let changed = {
             let mut usage = self.inner.usage.lock().unwrap();
             let same = usage.get(&report.machine).is_some_and(|prev| {
-                prev.claude == report.claude && prev.codex == report.codex
+                prev.claude == report.claude
+                    && prev.claude_exact == report.claude_exact
+                    && prev.codex == report.codex
             });
             usage.insert(report.machine.clone(), report.clone());
             !same
@@ -288,9 +290,10 @@ mod tests {
     fn usage_reports_broadcast_only_on_change() {
         let service = HubService::new(None);
         let mut rx = service.subscribe();
-        let report = |pct: f64, at: &str| UsageReport {
+        let report_with = |pct: f64, at: &str| UsageReport {
             machine: "wsl".into(),
             claude: None,
+            claude_exact: None,
             codex: Some(twin_core::codex::RateLimits {
                 primary: Some(twin_core::codex::RateLimitWindow {
                     used_percent: pct,
@@ -304,10 +307,10 @@ mod tests {
             reported_at: at.into(),
         };
 
-        service.report_usage(report(13.0, "2026-07-10T09:00:00Z"));
+        service.report_usage(report_with(13.0, "2026-07-10T09:00:00Z"));
         // Same numbers, newer timestamp: no rebroadcast.
-        service.report_usage(report(13.0, "2026-07-10T09:00:30Z"));
-        service.report_usage(report(14.0, "2026-07-10T09:01:00Z"));
+        service.report_usage(report_with(13.0, "2026-07-10T09:00:30Z"));
+        service.report_usage(report_with(14.0, "2026-07-10T09:01:00Z"));
 
         assert!(matches!(rx.try_recv().unwrap(), Event::Usage { .. }));
         let Event::Usage { report } = rx.try_recv().unwrap() else {
@@ -316,6 +319,31 @@ mod tests {
         assert_eq!(report.codex.unwrap().primary.unwrap().used_percent, 14.0);
         assert!(rx.try_recv().is_err());
         assert_eq!(service.usage_reports().len(), 1);
+
+        // A change only in the exact Claude reading must broadcast too.
+        let mut with_exact = report_with(14.0, "2026-07-10T09:02:00Z");
+        with_exact.claude_exact = Some(twin_core::ClaudePlanWindows {
+            five_hour: twin_core::PlanWindow {
+                used_percent: 24.0,
+                resets_at: None,
+            },
+            seven_day: twin_core::PlanWindow {
+                used_percent: 11.0,
+                resets_at: None,
+            },
+            seven_day_opus: None,
+            seven_day_sonnet: None,
+            observed_at: chrono::Utc::now(),
+        });
+        service.report_usage(with_exact.clone());
+        let Event::Usage { report } = rx.try_recv().unwrap() else {
+            panic!("expected the claude_exact change to broadcast");
+        };
+        assert_eq!(report.claude_exact.unwrap().five_hour.used_percent, 24.0);
+        // Identical exact reading: silent.
+        with_exact.reported_at = "2026-07-10T09:02:30Z".into();
+        service.report_usage(with_exact);
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]
