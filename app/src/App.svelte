@@ -3,7 +3,7 @@
   import { listen } from "@tauri-apps/api/event";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { hub, connectHub } from "./lib/hub.svelte";
-  import { settings } from "./lib/settings.svelte";
+  import { settings } from "./lib/settings-store.svelte";
   import AgentCard from "./lib/AgentCard.svelte";
   import Settings from "./lib/Settings.svelte";
   import UsageFooter from "./lib/UsageFooter.svelte";

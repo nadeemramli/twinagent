@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { settings, type Settings } from "./settings.svelte";
+  // NB: not "./settings.svelte" — on a case-insensitive filesystem that
+  // specifier resolves to THIS component instead of the store module.
+  import { settings, type Settings } from "./settings-store.svelte";
 
   let { onclose }: { onclose: () => void } = $props();
 

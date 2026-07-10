@@ -1,6 +1,6 @@
 <script lang="ts">
   import { contextTone } from "./format";
-  import { settings } from "./settings.svelte";
+  import { settings } from "./settings-store.svelte";
 
   // A thin status meter. State is never color-alone: the percent is always
   // printed beside the track (dataviz status rule).
