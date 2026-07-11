@@ -20,9 +20,10 @@ use serde_json::Value;
 
 use crate::model::{AgentSnapshot, AgentSource, JumpTarget, SessionState, UsageMetrics};
 
-/// Tool call pending longer than this without output is assumed to be
-/// waiting on the user (approval prompt) — same heuristic as Claude Code.
-pub const PERMISSION_WAIT: Duration = Duration::milliseconds(2500);
+// (No ">2.5s pending = approval prompt" heuristic here either: long
+// commands false-alarmed constantly, and Codex rollouts record no
+// approval-request events to key off, so a pending call is simply a call
+// running.)
 /// How long a reasoning record keeps the session in the thinking state.
 pub const THINKING_DECAY: Duration = Duration::seconds(3);
 /// No new records for this long → idle.
@@ -333,12 +334,8 @@ impl CodexSessionTracker {
         if self.interrupted {
             return SessionState::Interrupted;
         }
-        if let Some(oldest) = self.pending_calls.values().map(|c| c.since).min() {
-            return if now - oldest > PERMISSION_WAIT {
-                SessionState::NeedsYou
-            } else {
-                SessionState::ToolRunning
-            };
+        if !self.pending_calls.is_empty() {
+            return SessionState::ToolRunning;
         }
         if self.done && !self.turn_active {
             return SessionState::Done;
@@ -370,9 +367,7 @@ impl CodexSessionTracker {
     pub fn snapshot(&self, machine: &str, now: DateTime<Utc>) -> AgentSnapshot {
         let state = self.state_at(now);
         let needs_user_reason = match state {
-            SessionState::NeedsYou => {
-                Some("tool call pending — likely waiting for approval".to_string())
-            }
+            SessionState::NeedsYou => Some("waiting for you".to_string()),
             SessionState::Interrupted => Some("interrupted by user".to_string()),
             _ => None,
         };
@@ -477,8 +472,9 @@ mod tests {
         ));
         assert_eq!(t.state_at(at(2)), SessionState::ToolRunning);
         assert_eq!(t.current_task().as_deref(), Some("shell_command"));
-        // Pending past the grace window → approval prompt.
-        assert_eq!(t.state_at(at(5)), SessionState::NeedsYou);
+        // Still just running, however long it takes — no timing-based
+        // approval guess (long commands false-alarmed constantly).
+        assert_eq!(t.state_at(at(300)), SessionState::ToolRunning);
 
         t.ingest_line(&response(
             6,

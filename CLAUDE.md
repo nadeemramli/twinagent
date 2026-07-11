@@ -22,7 +22,7 @@ The Tauri app compiles only where GUI libs exist: Windows (real target, see TWI-
 
 - **inotify does not cross the WSL/Windows boundary.** The collector watches WSL paths from inside WSL; the Tauri app watches `C:\Users\Nadeem\{.claude,.codex}` natively. Never watch `\\wsl$` or `/mnt/c` paths for file events.
 - Agent CLIs run on BOTH sides of this machine (WSL and Windows dotdirs both active) — sessions from both must appear, machine-tagged, deduped (TWI-10).
-- Claude Code state machine heuristics (from AgentNotch): tool pending >2.5s without result → needs-you; `stop_reason == "end_turn"` → done; ~10s silence → idle; result containing "rejected" → interrupted.
+- Claude Code state machine: needs-you comes ONLY from the Notification hook (`~/.claude/twinagent-notify.jsonl`, hook installed in both sides' settings.json) — a pending tool is just tool-running however long it takes (the old >2.5s heuristic false-alarmed on every long command). `stop_reason == "end_turn"` → done; ~10s silence → idle; result containing "rejected" → interrupted; done/needs-you never decay to stale.
 - Codex rollout files carry exact plan usage: `event_msg.token_count.rate_limits` → `primary.used_percent` (5h), `secondary.used_percent` (weekly), `plan_type`, `resets_at`.
 - Usage readings are tagged `exact` / `estimated` / `stale` (`ReadingConfidence`) — never present an estimate as exact.
 - Local-first and private: no third-party service may see prompts, code, or credentials.

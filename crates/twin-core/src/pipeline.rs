@@ -84,6 +84,10 @@ pub struct Pipeline {
     files: HashMap<PathBuf, FileSession>,
     /// When the last full snapshot sweep ran.
     last_sweep: Option<Instant>,
+    /// Claude Notification-hook event stream (`~/.claude/
+    /// twinagent-notify.jsonl`, appended by the hook command): the
+    /// authoritative permission-prompt signal. Absent file = quiet no-op.
+    notify_tail: Option<TailReader>,
 }
 
 impl Pipeline {
@@ -94,12 +98,30 @@ impl Pipeline {
             roots.iter().map(|r| r.path.clone()).collect(),
             rescan_interval,
         );
+        // Hook events from this machine's Claude Code (TWIN_CLAUDE_NOTIFY
+        // overrides, e.g. for tests). Skip whatever is already in the file:
+        // old prompts were answered lifetimes ago.
+        let mut notify_tail = std::env::var("TWIN_CLAUDE_NOTIFY")
+            .map(PathBuf::from)
+            .ok()
+            .or_else(|| {
+                let home = std::env::var("USERPROFILE")
+                    .or_else(|_| std::env::var("HOME"))
+                    .ok()?;
+                Some(PathBuf::from(home).join(".claude").join("twinagent-notify.jsonl"))
+            })
+            .map(|path| TailReader::new(&path));
+        if let Some(tail) = &mut notify_tail {
+            let _ = tail.poll();
+        }
+
         Self {
             machine: machine.into(),
             roots,
             watcher,
             files: HashMap::new(),
             last_sweep: None,
+            notify_tail,
         }
     }
 
@@ -163,6 +185,8 @@ impl Pipeline {
             }
         }
 
+        self.drain_notify_events();
+
         // The full sweep exists for time-decay transitions; cap its rate no
         // matter how fast events arrive. Lines ingested above surface on
         // the next due sweep, at most SWEEP_INTERVAL away.
@@ -195,6 +219,40 @@ impl Pipeline {
             }
         }
         out
+    }
+
+    /// Route fresh Notification-hook events (permission prompts) to the
+    /// matching Claude tracker. Claude Code also sends "waiting for your
+    /// input" idle notifications — those are covered by done/idle states
+    /// and skipped here, so only genuine permission prompts alert.
+    fn drain_notify_events(&mut self) {
+        let Some(tail) = &mut self.notify_tail else {
+            return;
+        };
+        let Ok(lines) = tail.poll() else { return };
+        for line in lines {
+            let Ok(event) = serde_json::from_str::<serde_json::Value>(&line) else {
+                continue;
+            };
+            let Some(session_id) = event.get("session_id").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let message = event
+                .get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            if !message.to_lowercase().contains("permission") {
+                continue;
+            }
+            let now = Utc::now();
+            for session in self.files.values_mut() {
+                if let Tracker::Claude(tracker) = &mut session.tracker {
+                    if tracker.session_id() == Some(session_id) {
+                        tracker.note_permission_request(now, message.to_string());
+                    }
+                }
+            }
+        }
     }
 
     /// Machine-level Claude plan-window estimate, aggregated across every

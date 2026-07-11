@@ -38,22 +38,12 @@
       "task": "shell_command"
     },
     {
-      "ts": "2026-06-04T21:48:39.377Z",
-      "state": "needs_you",
-      "task": "shell_command"
-    },
-    {
       "ts": "2026-06-04T21:48:41.268Z",
       "state": "thinking"
     },
     {
       "ts": "2026-06-04T21:48:54.498Z",
       "state": "tool_running",
-      "task": "shell_command"
-    },
-    {
-      "ts": "2026-06-04T21:48:57.439Z",
-      "state": "needs_you",
       "task": "shell_command"
     },
     {

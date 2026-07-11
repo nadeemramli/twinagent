@@ -9,7 +9,9 @@
 //! State heuristics (replaced by hooks in Phase 2):
 //! - `tool_use` paired with `tool_result` by `tool_use_id`; a result
 //!   containing "rejected" → interrupted.
-//! - tool pending > 2.5 s without a result → needs-you (permission prompt).
+//! - permission prompts come from the Notification hook (see
+//!   [`ClaudeSessionTracker::note_permission_request`]); a pending tool by
+//!   itself is just tool-running, however long it takes.
 //! - `thinking` blocks → thinking, with a 3 s decay.
 //! - `stop_reason == "end_turn"` → done; `[Request interrupted by user` →
 //!   interrupted; ~10 s of silence → idle; very long mid-run silence →
@@ -23,9 +25,10 @@ use serde_json::Value;
 
 use crate::model::{AgentSnapshot, AgentSource, JumpTarget, SessionState, UsageMetrics};
 
-/// Tool pending longer than this without a result is assumed to be waiting
-/// for permission.
-pub const PERMISSION_WAIT: Duration = Duration::milliseconds(2500);
+// (The old ">2.5s pending tool = permission wait" heuristic is gone: long
+// tool runs — builds, tar, test suites — false-alarmed constantly. Real
+// permission prompts arrive via the Notification hook instead; see
+// `note_permission_request`.)
 /// How long a thinking block keeps the session in the thinking state.
 pub const THINKING_DECAY: Duration = Duration::seconds(3);
 /// No new records for this long → idle.
@@ -82,6 +85,9 @@ pub struct ClaudeSessionTracker {
     /// stop_reason of the newest assistant message; cleared by user input.
     last_stop_reason: Option<String>,
     interrupted: bool,
+    /// Newest hook-reported permission prompt (ts, message). Considered
+    /// answered once the transcript moves past `ts`.
+    permission_request: Option<(DateTime<Utc>, String)>,
     sidechain_records: u64,
     parse_errors: u64,
 }
@@ -93,6 +99,22 @@ impl ClaudeSessionTracker {
 
     pub fn session_id(&self) -> Option<&str> {
         self.session_id.as_deref()
+    }
+
+    /// Record a permission prompt reported by Claude Code's Notification
+    /// hook — the authoritative "needs you" signal (the transcript alone
+    /// can't distinguish a long tool run from a waiting prompt).
+    pub fn note_permission_request(&mut self, ts: DateTime<Utc>, message: String) {
+        self.permission_request = Some((ts, message));
+    }
+
+    /// True while the newest hook-reported prompt is unanswered: any
+    /// transcript record after it (approval → result, denial → rejected)
+    /// clears it.
+    fn awaiting_permission(&self) -> bool {
+        self.permission_request
+            .as_ref()
+            .is_some_and(|(ts, _)| self.last_activity.is_none_or(|last| last <= *ts))
     }
 
     pub fn cwd(&self) -> Option<&str> {
@@ -377,12 +399,13 @@ impl ClaudeSessionTracker {
         if self.interrupted {
             return SessionState::Interrupted;
         }
-        if let Some(oldest) = self.pending_tools.values().map(|t| t.since).min() {
-            return if now - oldest > PERMISSION_WAIT {
-                SessionState::NeedsYou
-            } else {
-                SessionState::ToolRunning
-            };
+        if self.awaiting_permission() {
+            return SessionState::NeedsYou;
+        }
+        // A pending tool is just a tool running, however long it takes —
+        // real permission waits come from the hook above.
+        if !self.pending_tools.is_empty() {
+            return SessionState::ToolRunning;
         }
         if self.last_stop_reason.as_deref() == Some("end_turn") {
             return SessionState::Done;
@@ -421,9 +444,12 @@ impl ClaudeSessionTracker {
     pub fn snapshot(&self, machine: &str, now: DateTime<Utc>) -> AgentSnapshot {
         let state = self.state_at(now);
         let needs_user_reason = match state {
-            SessionState::NeedsYou => {
-                Some("tool pending — likely waiting for permission".to_string())
-            }
+            SessionState::NeedsYou => Some(
+                self.permission_request
+                    .as_ref()
+                    .map(|(_, message)| message.clone())
+                    .unwrap_or_else(|| "waiting for you".to_string()),
+            ),
             SessionState::Interrupted => Some("interrupted by user".to_string()),
             _ => None,
         };
@@ -502,20 +528,42 @@ mod tests {
     }
 
     #[test]
-    fn tool_running_then_needs_you_after_grace() {
+    fn pending_tool_is_running_however_long_it_takes() {
         let mut t = ClaudeSessionTracker::new();
         t.ingest_line(&assistant_tool_use(0, "t1", "Bash"));
         assert_eq!(t.state_at(at(1)), SessionState::ToolRunning);
-        assert_eq!(t.state_at(at(3)), SessionState::NeedsYou);
+        // A six-minute build is a build, not a permission prompt.
+        assert_eq!(t.state_at(at(360)), SessionState::ToolRunning);
         assert_eq!(
             t.current_task().as_deref(),
             Some("Bash: List files"),
             "pending tool should surface as the current task"
         );
 
-        t.ingest_line(&tool_result(4, "t1", "ok"));
+        t.ingest_line(&tool_result(400, "t1", "ok"));
         // Result arrived: model is composing the next step.
-        assert_eq!(t.state_at(at(5)), SessionState::Thinking);
+        assert_eq!(t.state_at(at(401)), SessionState::Thinking);
+    }
+
+    #[test]
+    fn hook_permission_request_drives_needs_you_until_answered() {
+        let mut t = ClaudeSessionTracker::new();
+        t.ingest_line(&assistant_tool_use(0, "t1", "Bash"));
+        assert_eq!(t.state_at(at(10)), SessionState::ToolRunning);
+
+        // Notification hook fires: authoritative needs-you, message shown.
+        t.note_permission_request(at(11), "Claude needs your permission to use Bash".into());
+        assert_eq!(t.state_at(at(12)), SessionState::NeedsYou);
+        let snap = t.snapshot("wsl", at(12));
+        assert!(snap.needs_user);
+        assert_eq!(
+            snap.needs_user_reason.as_deref(),
+            Some("Claude needs your permission to use Bash")
+        );
+
+        // Approval → the tool result lands after the prompt → cleared.
+        t.ingest_line(&tool_result(20, "t1", "ok"));
+        assert_ne!(t.state_at(at(21)), SessionState::NeedsYou);
     }
 
     #[test]
