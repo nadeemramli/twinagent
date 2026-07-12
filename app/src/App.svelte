@@ -19,6 +19,20 @@
   let now = $state(Date.now());
   setInterval(() => (now = Date.now()), 10_000);
 
+  // Report the pill's rendered width so the Rust side can keep the rest
+  // of the (fixed-size, transparent) window click-through — the pill is
+  // the only hit target when collapsed.
+  let pillEl: HTMLDivElement | undefined = $state();
+  $effect(() => {
+    if (!pillEl) return;
+    const report = () =>
+      invoke("set_pill_size", { width: pillEl!.offsetWidth }).catch(() => {});
+    const observer = new ResizeObserver(report);
+    observer.observe(pillEl);
+    report();
+    return () => observer.disconnect();
+  });
+
   // Rust owns the expanded state (it owns the window size); the webview
   // mirrors it via the `panel` event.
   let expanded = $state(false);
@@ -127,6 +141,7 @@
   <div
     class="pill"
     class:offline={!hub.connected}
+    bind:this={pillEl}
     onpointerdown={onPointerDown}
     role="button"
     tabindex="0"

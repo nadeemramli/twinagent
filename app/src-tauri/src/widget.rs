@@ -30,6 +30,19 @@ pub struct PanelState(AtomicBool);
 /// mirrors the persisted `pinned` setting).
 pub struct PinState(pub AtomicBool);
 
+/// Rendered pill width in logical px, reported by the webview's
+/// ResizeObserver — the hit target for click-through tracking. The window
+/// is a fixed 420-wide rectangle; everything outside the pill is
+/// transparent air that must not swallow clicks.
+pub struct PillWidth(pub std::sync::atomic::AtomicU32);
+
+impl Default for PillWidth {
+    fn default() -> Self {
+        // Roomy fallback until the webview reports ("0 agents" ≈ 120px).
+        Self(std::sync::atomic::AtomicU32::new(200))
+    }
+}
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 struct WidgetConfig {
@@ -278,6 +291,68 @@ pub fn apply_autostart(app: &tauri::AppHandle, enabled: bool) {
     } else {
         autolaunch.disable()
     };
+}
+
+/// The pill's CSS geometry inside the window (logical px): margin-top 10,
+/// height 34, horizontally centered — must match App.svelte's `.pill`.
+const PILL_TOP: f64 = 10.0;
+const PILL_VISUAL_HEIGHT: f64 = 34.0;
+/// Hover slack so the edge of the pill isn't fiddly to hit.
+const PILL_SLACK: f64 = 6.0;
+
+#[tauri::command]
+pub fn set_pill_size(app: tauri::AppHandle, width: f64) {
+    app.state::<PillWidth>()
+        .0
+        .store(width.max(1.0) as u32, Ordering::Relaxed);
+}
+
+/// Make the window click-through except when the cursor is actually over
+/// the pill (or the panel is open). The window is a fixed-size transparent
+/// rectangle; without this, its invisible margins steal clicks from
+/// whatever the pill floats over. Cursor-poll + `set_ignore_cursor_events`
+/// is the standard pattern — per-region hit testing doesn't exist for
+/// webview windows.
+pub fn setup_click_through(window: &WebviewWindow) {
+    let tracked = window.clone();
+    tauri::async_runtime::spawn(async move {
+        let mut interactive = true;
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+            let want = wants_interaction(&tracked);
+            if want != interactive {
+                interactive = want;
+                let _ = tracked.set_ignore_cursor_events(!want);
+            }
+        }
+    });
+}
+
+fn wants_interaction(window: &WebviewWindow) -> bool {
+    // Expanded panel: the whole window is real UI.
+    if window.state::<PanelState>().0.load(Ordering::Relaxed) {
+        return true;
+    }
+    let (Ok(pos), Ok(size), Ok(cursor)) = (
+        window.outer_position(),
+        window.outer_size(),
+        window.cursor_position(),
+    ) else {
+        // Can't tell — stay interactive rather than locking the user out.
+        return true;
+    };
+    let scale = window.scale_factor().unwrap_or(1.0);
+    let pill_width =
+        window.state::<PillWidth>().0.load(Ordering::Relaxed) as f64 * scale;
+    let slack = PILL_SLACK * scale;
+
+    let center_x = pos.x as f64 + size.width as f64 / 2.0;
+    let left = center_x - pill_width / 2.0 - slack;
+    let right = center_x + pill_width / 2.0 + slack;
+    let top = pos.y as f64 + PILL_TOP * scale - slack;
+    let bottom = pos.y as f64 + (PILL_TOP + PILL_VISUAL_HEIGHT) * scale + slack;
+
+    cursor.x >= left && cursor.x <= right && cursor.y >= top && cursor.y <= bottom
 }
 
 /// Collapse when focus leaves the panel — unless the user pinned it open

@@ -99,7 +99,8 @@ fn main() {
             jump::jump,
             jump::focus_agent,
             widget::get_settings,
-            widget::update_settings
+            widget::update_settings,
+            widget::set_pill_size
         ])
         .manage(widget::PanelState::default())
         .setup(|app| {
@@ -155,9 +156,11 @@ fn main() {
             let window = app
                 .get_webview_window("main")
                 .expect("main window exists");
+            app.manage(widget::PillWidth::default());
             widget::position_pill(&window, &data_dir);
             widget::remember_monitor_on_move(&window, data_dir.clone());
             widget::collapse_on_blur(&window);
+            widget::setup_click_through(&window);
             widget::setup_hotkey(app, &data_dir)?;
 
             widget::setup_tray(app)?;
