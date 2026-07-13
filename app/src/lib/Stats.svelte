@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { invoke } from "@tauri-apps/api/core";
   import { compact } from "./format";
 
   let { onclose }: { onclose: () => void } = $props();
@@ -31,8 +32,9 @@
 
   onMount(async () => {
     try {
-      const res = await fetch("http://127.0.0.1:17871/v1/stats");
-      reports = await res.json();
+      // Via the Rust side — the hub is in-process, and a webview fetch to
+      // its HTTP port would be blocked by CORS.
+      reports = await invoke<UsageStats[]>("get_stats");
     } catch {
       failed = true;
     } finally {
@@ -116,7 +118,9 @@
   {#if loading}
     <p class="note">loading…</p>
   {:else if failed}
-    <p class="note">Couldn't reach the hub.</p>
+    <p class="note">Couldn't read stats from the hub.</p>
+  {:else if reports.length === 0}
+    <p class="note">No stats yet — collectors report within a minute of startup.</p>
   {:else}
     <div class="tiles">
       <div class="tile accent">

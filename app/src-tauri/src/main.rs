@@ -81,6 +81,14 @@ fn toggle_panel(window: tauri::WebviewWindow) {
     widget::toggle_panel(&window);
 }
 
+/// Stats for the panel's stats pane, straight from the in-process hub —
+/// a webview fetch to the hub's HTTP port would be cross-origin (the hub
+/// serves no CORS headers; only the WebSocket escapes that).
+#[tauri::command]
+fn get_stats(hub: tauri::State<twin_hub::HubService>) -> Vec<twin_core::UsageStats> {
+    hub.usage_stats()
+}
+
 #[tauri::command]
 fn set_panel(window: tauri::WebviewWindow, expanded: bool) {
     widget::set_expanded(&window, expanded);
@@ -96,6 +104,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             toggle_panel,
             set_panel,
+            get_stats,
             jump::jump,
             jump::focus_agent,
             widget::get_settings,
