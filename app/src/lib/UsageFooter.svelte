@@ -7,7 +7,11 @@
   // never dressed up as a percentage it isn't (TWI-16/17 confidence rule).
   // When the OAuth usage endpoint gives an exact Claude reading, that one
   // gets bars too and the estimate rows stand down.
-  let { reports, now }: { reports: UsageReport[]; now: number } = $props();
+  let {
+    reports,
+    now,
+    onstats,
+  }: { reports: UsageReport[]; now: number; onstats?: () => void } = $props();
 
   // The exact Claude reading is account-level, so machines may duplicate
   // it — newest observation wins, rendered once.
@@ -40,7 +44,12 @@
 
 {#if reports.length > 0 || claudeExact}
   <section class="usage">
-    <h3>Plan usage</h3>
+    <h3>
+      Plan usage
+      {#if onstats}
+        <button class="more" onclick={onstats}>stats ›</button>
+      {/if}
+    </h3>
     {#if claudeExact}
       <div class="machine">
         <span class="machine-tag">account</span>
@@ -137,6 +146,26 @@
     text-transform: uppercase;
     letter-spacing: 0.06em;
     color: #565b64;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .more {
+    font: inherit;
+    font-size: 10px;
+    text-transform: none;
+    letter-spacing: 0;
+    color: #8a8f98;
+    background: rgba(255, 255, 255, 0.06);
+    border: none;
+    border-radius: 6px;
+    padding: 2px 8px;
+    cursor: pointer;
+  }
+
+  .more:hover {
+    color: #dee1e6;
   }
 
   .machine {

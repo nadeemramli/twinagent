@@ -300,6 +300,24 @@ impl Pipeline {
         }
     }
 
+    /// Historical usage aggregation for the stats pane (today/7d/30d/all),
+    /// from every tracked session's usage events.
+    pub fn usage_stats(&self, now: DateTime<Utc>) -> crate::stats::UsageStats {
+        let sessions = self.files.values().map(|s| match &s.tracker {
+            Tracker::Claude(t) => crate::stats::SessionUsage {
+                source: AgentSource::ClaudeCode,
+                model: t.model().map(String::from),
+                events: t.usage_events(),
+            },
+            Tracker::Codex(t) => crate::stats::SessionUsage {
+                source: AgentSource::Codex,
+                model: t.model().map(String::from),
+                events: t.usage_events(),
+            },
+        });
+        crate::stats::compute(&self.machine, sessions, now)
+    }
+
     /// Everything currently tracked, evaluated now — for a full resend after
     /// the hub connection drops.
     pub fn all_snapshots(&self) -> Vec<AgentSnapshot> {

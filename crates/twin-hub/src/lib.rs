@@ -58,6 +58,9 @@ struct Inner {
     /// Latest plan-usage report per machine. Ephemeral by design — the
     /// collectors regenerate it from disk within seconds of starting.
     usage: Mutex<HashMap<String, UsageReport>>,
+    /// Latest historical-usage aggregation per machine (stats pane).
+    /// Ephemeral for the same reason.
+    stats: Mutex<HashMap<String, twin_core::UsageStats>>,
     tx: broadcast::Sender<Event>,
 }
 
@@ -87,6 +90,7 @@ impl HubService {
                 registry: Mutex::new(registry),
                 store: store.map(Mutex::new),
                 usage: Mutex::new(HashMap::new()),
+                stats: Mutex::new(HashMap::new()),
                 tx,
             }),
         }
@@ -219,6 +223,21 @@ impl HubService {
     /// Latest plan usage per machine.
     pub fn usage_reports(&self) -> Vec<UsageReport> {
         self.inner.usage.lock().unwrap().values().cloned().collect()
+    }
+
+    /// Record a machine's historical-usage aggregation (stats pane). No
+    /// broadcast — the pane fetches on open.
+    pub fn report_stats(&self, stats: twin_core::UsageStats) {
+        self.inner
+            .stats
+            .lock()
+            .unwrap()
+            .insert(stats.machine.clone(), stats);
+    }
+
+    /// Latest historical-usage aggregation per machine.
+    pub fn usage_stats(&self) -> Vec<twin_core::UsageStats> {
+        self.inner.stats.lock().unwrap().values().cloned().collect()
     }
 
     /// Subscribe to diffs. Slow readers that lag more than the channel

@@ -103,6 +103,8 @@ pub struct Forwarder {
     pending: HashMap<String, AgentSnapshot>,
     /// Latest unacknowledged plan-usage report (state, so newest wins).
     pending_usage: Option<UsageReport>,
+    /// Latest unacknowledged stats aggregation (state, so newest wins).
+    pending_stats: Option<twin_core::UsageStats>,
     backoff: Duration,
     next_attempt: Instant,
 }
@@ -122,6 +124,7 @@ impl Forwarder {
             active: 0,
             pending: HashMap::new(),
             pending_usage: None,
+            pending_stats: None,
             backoff: BACKOFF_MIN,
             next_attempt: Instant::now(),
         }
@@ -143,13 +146,19 @@ impl Forwarder {
         self.flush();
     }
 
+    /// Queue the machine's stats aggregation (newest wins) and try to flush.
+    pub fn send_stats(&mut self, stats: twin_core::UsageStats) {
+        self.pending_stats = Some(stats);
+        self.flush();
+    }
+
     /// How many snapshots are waiting on the hub to come back.
     pub fn pending(&self) -> usize {
         self.pending.len()
     }
 
     fn flush(&mut self) {
-        if (self.pending.is_empty() && self.pending_usage.is_none())
+        if (self.pending.is_empty() && self.pending_usage.is_none() && self.pending_stats.is_none())
             || Instant::now() < self.next_attempt
         {
             return;
@@ -158,6 +167,7 @@ impl Forwarder {
         let base = &self.bases[self.active];
         let endpoint = format!("{base}/v1/snapshots");
         let usage_endpoint = format!("{base}/v1/usage");
+        let stats_endpoint = format!("{base}/v1/stats");
         let result = (|| -> Result<(), ureq::Error> {
             if !self.pending.is_empty() {
                 let batch: Vec<&AgentSnapshot> = self.pending.values().collect();
@@ -171,6 +181,12 @@ impl Forwarder {
                     .timeout(Duration::from_secs(5))
                     .send_json(report)?;
                 self.pending_usage = None;
+            }
+            if let Some(stats) = &self.pending_stats {
+                ureq::post(&stats_endpoint)
+                    .timeout(Duration::from_secs(5))
+                    .send_json(stats)?;
+                self.pending_stats = None;
             }
             Ok(())
         })();

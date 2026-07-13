@@ -39,7 +39,9 @@ fn main() {
     let mut plan_poller = ClaudePlanPoller::new(config.claude_creds.clone());
 
     let usage_cadence = Duration::from_secs(30);
+    let stats_cadence = Duration::from_secs(300);
     let mut next_usage = std::time::Instant::now();
+    let mut next_stats = std::time::Instant::now() + Duration::from_secs(20);
     loop {
         let snapshots = pipeline.poll(Duration::from_millis(500));
         // send() also flushes anything buffered from an earlier outage.
@@ -52,6 +54,14 @@ fn main() {
             report.claude_exact = plan_poller.tick(now);
             forwarder.send_usage(report);
             next_usage = std::time::Instant::now() + usage_cadence;
+        }
+
+        // Historical stats less often — the pane fetches on open, so this
+        // just keeps the hub's copy fresh. First send waits out the boot
+        // re-read so it isn't a partial aggregation.
+        if std::time::Instant::now() >= next_stats {
+            forwarder.send_stats(pipeline.usage_stats(chrono::Utc::now()));
+            next_stats = std::time::Instant::now() + stats_cadence;
         }
     }
 }

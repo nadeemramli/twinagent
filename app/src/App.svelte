@@ -6,13 +6,14 @@
   import { settings } from "./lib/settings-store.svelte";
   import AgentCard from "./lib/AgentCard.svelte";
   import Settings from "./lib/Settings.svelte";
+  import Stats from "./lib/Stats.svelte";
   import UsageFooter from "./lib/UsageFooter.svelte";
 
   connectHub();
   settings.load();
 
-  // Settings pane (TWI-15), opened from the tray menu.
-  let view = $state<"agents" | "settings">("agents");
+  // Settings pane (TWI-15) and stats pane, alternate panel views.
+  let view = $state<"agents" | "settings" | "stats">("agents");
   listen("open-settings", () => (view = "settings"));
 
   // A slow clock for relative times and reset countdowns.
@@ -168,6 +169,8 @@
     <section class="panel">
       {#if view === "settings"}
         <Settings onclose={() => (view = "agents")} />
+      {:else if view === "stats"}
+        <Stats onclose={() => (view = "agents")} />
       {:else}
         <div class="sessions">
           {#if machines.length === 0}
@@ -184,7 +187,7 @@
             {/each}
           {/if}
         </div>
-        <UsageFooter reports={usageReports} {now} />
+        <UsageFooter reports={usageReports} {now} onstats={() => (view = "stats")} />
       {/if}
     </section>
   {/if}

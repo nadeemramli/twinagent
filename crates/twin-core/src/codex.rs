@@ -73,6 +73,11 @@ pub struct CodexSessionTracker {
     /// `total_token_usage` is already cumulative per session: last one wins.
     total_usage: Option<Value>,
     last_usage: Option<Value>,
+    /// Per-observation deltas of the cumulative totals — reconstructed at
+    /// ingest for historical stats bucketing (transcripts are re-read from
+    /// the start on boot, so this covers full history).
+    usage_deltas: Vec<(DateTime<Utc>, crate::plan_usage::TokenCounts)>,
+    prev_cumulative: (u64, u64, u64),
     rate_limits: Option<RateLimits>,
     pending_calls: HashMap<String, PendingCall>,
     /// Set by `task_started`, cleared by `task_complete`/`turn_aborted`.
@@ -124,6 +129,49 @@ impl CodexSessionTracker {
     /// Exact plan-window usage from the newest `token_count` record.
     pub fn rate_limits(&self) -> Option<&RateLimits> {
         self.rate_limits.as_ref()
+    }
+
+    /// Per-observation usage deltas, for historical stats bucketing.
+    pub fn usage_events(&self) -> Vec<(DateTime<Utc>, crate::plan_usage::TokenCounts)> {
+        self.usage_deltas.clone()
+    }
+
+    /// Diff a cumulative `total_token_usage` against the previous one and
+    /// record the increment. A shrinking total means the session restarted
+    /// its accounting — treat the new total as the fresh baseline.
+    fn note_usage_delta(&mut self, total: &Value, ts: Option<DateTime<Utc>>) {
+        let Some(ts) = ts else { return };
+        let read = |key: &str| total.get(key).and_then(Value::as_u64).unwrap_or(0);
+        let (input, cached, output) = (
+            read("input_tokens"),
+            read("cached_input_tokens"),
+            read("output_tokens"),
+        );
+        let (prev_input, prev_cached, prev_output) = self.prev_cumulative;
+        let (d_input, d_cached, d_output) = if input < prev_input || output < prev_output {
+            (input, cached, output)
+        } else {
+            (
+                input - prev_input,
+                cached.saturating_sub(prev_cached),
+                output - prev_output,
+            )
+        };
+        self.prev_cumulative = (input, cached, output);
+        if d_input == 0 && d_output == 0 {
+            return;
+        }
+        // Codex's input_tokens includes the cached portion; split it out so
+        // the fields mean the same thing as Claude's.
+        self.usage_deltas.push((
+            ts,
+            crate::plan_usage::TokenCounts {
+                input_tokens: d_input.saturating_sub(d_cached),
+                output_tokens: d_output,
+                cache_read_tokens: d_cached,
+                cache_creation_tokens: 0,
+            },
+        ));
     }
 
     pub fn parse_errors(&self) -> u64 {
@@ -232,6 +280,7 @@ impl CodexSessionTracker {
             Some("token_count") => {
                 if let Some(info) = payload.get("info").filter(|i| !i.is_null()) {
                     if let Some(total) = info.get("total_token_usage") {
+                        self.note_usage_delta(total, ts);
                         self.total_usage = Some(total.clone());
                     }
                     if let Some(last) = info.get("last_token_usage") {

@@ -36,7 +36,9 @@ impl EmbeddedCollector {
                 let mut plan_poller =
                     twin_core::ClaudePlanPoller::new(twin_core::ClaudePlanPoller::default_creds_path());
                 let usage_cadence = Duration::from_secs(30);
+                let stats_cadence = Duration::from_secs(300);
                 let mut next_usage = std::time::Instant::now();
+                let mut next_stats = std::time::Instant::now() + Duration::from_secs(20);
                 while !stop_flag.load(Ordering::Relaxed) {
                     for snapshot in pipeline.poll(Duration::from_millis(500)) {
                         service.ingest(snapshot);
@@ -49,6 +51,12 @@ impl EmbeddedCollector {
                         report.claude_exact = plan_poller.tick(now);
                         service.report_usage(report);
                         next_usage = std::time::Instant::now() + usage_cadence;
+                    }
+                    // Historical stats less often (first send waits out the
+                    // boot re-read so it isn't a partial aggregation).
+                    if std::time::Instant::now() >= next_stats {
+                        service.report_stats(pipeline.usage_stats(chrono::Utc::now()));
+                        next_stats = std::time::Instant::now() + stats_cadence;
                     }
                 }
             })

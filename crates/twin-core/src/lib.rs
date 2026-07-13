@@ -9,6 +9,7 @@ pub mod codex;
 pub mod model;
 pub mod pipeline;
 pub mod plan_usage;
+pub mod stats;
 pub mod tail;
 pub mod watch;
 
@@ -18,5 +19,6 @@ pub use codex::CodexSessionTracker;
 pub use model::*;
 pub use pipeline::{Pipeline, SourceRoot};
 pub use plan_usage::{PlanEstimate, TokenCounts, WindowUsage};
+pub use stats::UsageStats;
 pub use tail::TailReader;
 pub use watch::{DirWatcher, FileEvent, FileEventKind};

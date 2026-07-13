@@ -26,6 +26,7 @@ pub fn router(service: HubService) -> Router {
         .route("/v1/snapshots", post(ingest_snapshots))
         .route("/v1/sessions", get(list_sessions))
         .route("/v1/usage", post(ingest_usage).get(list_usage))
+        .route("/v1/stats", post(ingest_stats).get(list_stats))
         .route("/v1/ws", get(ws_upgrade))
         .with_state(service)
 }
@@ -74,6 +75,18 @@ async fn ingest_usage(
 
 async fn list_usage(State(service): State<HubService>) -> Json<Vec<UsageReport>> {
     Json(service.usage_reports())
+}
+
+async fn ingest_stats(
+    State(service): State<HubService>,
+    Json(stats): Json<twin_core::UsageStats>,
+) -> StatusCode {
+    service.report_stats(stats);
+    StatusCode::ACCEPTED
+}
+
+async fn list_stats(State(service): State<HubService>) -> Json<Vec<twin_core::UsageStats>> {
+    Json(service.usage_stats())
 }
 
 async fn ws_upgrade(
