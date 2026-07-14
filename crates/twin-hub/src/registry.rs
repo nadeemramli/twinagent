@@ -72,6 +72,9 @@ impl Hub {
                     || prev.current_task != snapshot.current_task
                     || prev.usage != snapshot.usage
                     || prev.project != snapshot.project
+                    || prev.git_branch != snapshot.git_branch
+                    || prev.needs_user_reason != snapshot.needs_user_reason
+                    || prev.jump != snapshot.jump
                     || prev.last_activity != snapshot.last_activity;
                 if !visible_change {
                     return Delta::Unchanged;
@@ -103,10 +106,14 @@ impl Hub {
             ) {
                 continue;
             }
-            let Ok(last) = DateTime::parse_from_rfc3339(&s.last_activity) else {
-                continue;
+            // An unparseable timestamp is treated as maximally old: better to
+            // stale (and later prune) a corrupt row than leak a card forever
+            // (BUGHUNT #8).
+            let stale_reached = match DateTime::parse_from_rfc3339(&s.last_activity) {
+                Ok(last) => now - last.with_timezone(&Utc) >= threshold,
+                Err(_) => true,
             };
-            if now - last.with_timezone(&Utc) >= threshold {
+            if stale_reached {
                 s.status = AgentStatus::Stale;
                 changed.push(key.clone());
             }
@@ -121,9 +128,11 @@ impl Hub {
             .sessions
             .iter()
             .filter(|(_, s)| {
+                // Unparseable timestamp → maximally old → prunable, so a
+                // corrupt row can never haunt the widget forever (BUGHUNT #8).
                 DateTime::parse_from_rfc3339(&s.last_activity)
                     .map(|last| now - last.with_timezone(&Utc) >= retention)
-                    .unwrap_or(false)
+                    .unwrap_or(true)
             })
             .map(|(k, _)| k.clone())
             .collect();
@@ -214,6 +223,43 @@ mod tests {
         windows.machine = "windows".into();
         assert_eq!(hub.upsert(windows), Delta::New);
         assert_eq!(hub.len(), 2);
+    }
+
+    #[test]
+    fn unparseable_last_activity_is_staled_and_pruned() {
+        let mut hub = Hub::new();
+        let mut bad = snapshot("bad", AgentStatus::Thinking);
+        bad.last_activity = "not-a-timestamp".into();
+        hub.upsert(bad);
+        let now = DateTime::parse_from_rfc3339("2026-07-10T10:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        // A corrupt timestamp counts as maximally old: staled on the sweep...
+        let staled = hub.mark_stale(now, Duration::minutes(30));
+        assert_eq!(staled.len(), 1);
+        assert_eq!(
+            hub.get("wsl/claude-code/bad").unwrap().status,
+            AgentStatus::Stale
+        );
+        // ...and pruned rather than leaked forever.
+        assert_eq!(hub.prune(now, Duration::hours(24)).len(), 1);
+        assert!(hub.is_empty());
+    }
+
+    #[test]
+    fn visible_change_covers_branch_reason_and_jump() {
+        let mut hub = Hub::new();
+        hub.upsert(snapshot("a", AgentStatus::ToolRunning));
+        // A branch switch alone must broadcast (BUGHUNT #7).
+        let mut branch = snapshot("a", AgentStatus::ToolRunning);
+        branch.git_branch = Some("feature".into());
+        assert!(matches!(hub.upsert(branch), Delta::Updated { .. }));
+        // A newly-populated jump target alone must broadcast.
+        let mut jump = snapshot("a", AgentStatus::ToolRunning);
+        jump.git_branch = Some("feature".into());
+        jump.jump = Some(twin_core::JumpTarget::VsCode("/proj".into()));
+        assert!(matches!(hub.upsert(jump), Delta::Updated { .. }));
     }
 
     #[test]

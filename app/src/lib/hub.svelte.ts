@@ -3,6 +3,8 @@
 // (TWI-10). Reconnects forever with capped backoff — the pill must survive
 // hub restarts without user attention.
 
+import { invoke } from "@tauri-apps/api/core";
+
 export type AgentStatus =
   | "thinking"
   | "tool_running"
@@ -144,15 +146,29 @@ class HubState {
 
 export const hub = new HubState();
 
-const HUB_WS = "ws://127.0.0.1:17871/v1/ws";
+const DEFAULT_HUB_PORT = 17871;
 const RECONNECT_MIN_MS = 500;
 const RECONNECT_MAX_MS = 10_000;
 
-export function connectHub(url: string = HUB_WS) {
+/// Resolve the hub's WebSocket URL from the configured port. The hub binds
+/// `settings.hub_port`, so a changed port must reach the webview too — asking
+/// the Tauri backend keeps the two in sync (BUGHUNT #1). Falls back to the
+/// default when there's no backend (plain `vite dev`).
+async function resolveHubWs(): Promise<string> {
+  try {
+    const port = await invoke<number>("get_hub_port");
+    return `ws://127.0.0.1:${port}/v1/ws`;
+  } catch {
+    return `ws://127.0.0.1:${DEFAULT_HUB_PORT}/v1/ws`;
+  }
+}
+
+export function connectHub(url?: string) {
   let backoff = RECONNECT_MIN_MS;
 
-  const open = () => {
-    const ws = new WebSocket(url);
+  const open = async () => {
+    const target = url ?? (await resolveHubWs());
+    const ws = new WebSocket(target);
     ws.onopen = () => {
       hub.connected = true;
       backoff = RECONNECT_MIN_MS;

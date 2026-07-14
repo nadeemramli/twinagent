@@ -126,6 +126,12 @@ impl DirWatcher {
         let roots = self.roots.clone();
         for root in &roots {
             if !root.is_dir() {
+                // The root vanished (e.g. the whole `.codex` dir was removed).
+                // Forget that we watched it so a later rescan that finds it
+                // re-registers it with the platform watcher — otherwise only
+                // the fallback poll would ever see the recreated dir (BUGHUNT
+                // #14).
+                self.watched_roots.retain(|r| r != root);
                 continue;
             }
             if let Some(watcher) = &mut self.watcher {
@@ -275,6 +281,36 @@ mod tests {
         let events = poll_until(&mut watcher, Duration::from_secs(5), |evs| !evs.is_empty());
         assert_eq!(events[0].kind, FileEventKind::Created);
         assert_eq!(events[0].path, root.join("s.jsonl"));
+    }
+
+    #[test]
+    fn vanished_root_is_unregistered_for_rewatch() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("root");
+        fs::create_dir(&root).unwrap();
+        let mut watcher = DirWatcher::new(vec![root.clone()], Duration::from_millis(20));
+        // Registered with the platform watcher on construction.
+        assert!(
+            watcher.watched_roots.contains(&root),
+            "root should be watched after the initial scan"
+        );
+
+        // The root disappears; a rescan must forget it so the next rescan
+        // re-registers it once it comes back (BUGHUNT #14).
+        fs::remove_dir_all(&root).unwrap();
+        watcher.rescan();
+        assert!(
+            !watcher.watched_roots.contains(&root),
+            "a vanished root must be dropped from watched_roots"
+        );
+
+        // Recreate it: the next rescan re-registers it.
+        fs::create_dir(&root).unwrap();
+        watcher.rescan();
+        assert!(
+            watcher.watched_roots.contains(&root),
+            "a recreated root must be re-registered with the watcher"
+        );
     }
 
     #[test]

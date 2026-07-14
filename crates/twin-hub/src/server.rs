@@ -124,21 +124,42 @@ async fn ws_session(service: HubService, socket: WebSocket) {
     loop {
         tokio::select! {
             event = rx.recv() => {
-                let text = match event {
-                    Ok(event) => serde_json::to_string(&event).ok(),
-                    // Lagged: this client missed diffs — resync with a Full.
+                match event {
+                    Ok(event) => {
+                        let Ok(text) = serde_json::to_string(&event) else { continue };
+                        if sink.send(Message::Text(text.into())).await.is_err() {
+                            break;
+                        }
+                    }
+                    // Lagged: this client missed diffs — resync with a Full,
+                    // then replay current usage reports so a dropped Usage
+                    // event self-heals (BUGHUNT #9). Stats aren't carried on
+                    // the WS; the pane refetches them on open.
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
                         rx = rx.resubscribe();
-                        serde_json::to_string(&Event::Full {
+                        let full = Event::Full {
                             sessions: service.logical_sessions(),
-                        })
-                        .ok()
+                        };
+                        let mut disconnected = false;
+                        if let Ok(text) = serde_json::to_string(&full) {
+                            disconnected = sink.send(Message::Text(text.into())).await.is_err();
+                        }
+                        if !disconnected {
+                            for report in service.usage_reports() {
+                                let Ok(text) = serde_json::to_string(&Event::Usage { report }) else {
+                                    continue;
+                                };
+                                if sink.send(Message::Text(text.into())).await.is_err() {
+                                    disconnected = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if disconnected {
+                            break;
+                        }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                };
-                let Some(text) = text else { continue };
-                if sink.send(Message::Text(text.into())).await.is_err() {
-                    break;
                 }
             }
             inbound = stream.next() => {

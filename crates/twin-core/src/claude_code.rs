@@ -366,13 +366,16 @@ impl ClaudeSessionTracker {
         }
     }
 
-    /// Timestamped per-message usage, deduped — feed for the plan-window
-    /// estimator ([`crate::plan_usage::estimate`]).
-    pub fn usage_events(&self) -> Vec<(DateTime<Utc>, crate::plan_usage::TokenCounts)> {
+    /// `(message_id, timestamp, tokens)` per message, deduped within this
+    /// tracker. The message id lets callers dedup *across* trackers too — the
+    /// same id can appear in two transcript files (a session resumed into a
+    /// new file, a compaction copy) and must be counted once (BUGHUNT #3).
+    pub fn usage_events(&self) -> Vec<(String, DateTime<Utc>, crate::plan_usage::TokenCounts)> {
         self.usage_by_msg
-            .values()
-            .filter_map(|(ts, u)| {
+            .iter()
+            .filter_map(|(id, (ts, u))| {
                 Some((
+                    id.clone(),
                     (*ts)?,
                     crate::plan_usage::TokenCounts {
                         input_tokens: u.input,

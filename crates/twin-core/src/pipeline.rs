@@ -88,7 +88,17 @@ pub struct Pipeline {
     /// twinagent-notify.jsonl`, appended by the hook command): the
     /// authoritative permission-prompt signal. Absent file = quiet no-op.
     notify_tail: Option<TailReader>,
+    /// Permission prompts whose `session_id` has no tracker yet (the
+    /// transcript file has not been discovered). Newest per session_id;
+    /// re-matched on every drain and dropped after [`PERMISSION_BUFFER_TTL`]
+    /// so a race between the hook and file discovery never loses a prompt
+    /// (BUGHUNT #13).
+    pending_permissions: HashMap<String, (DateTime<Utc>, String)>,
 }
+
+/// How long (seconds) an unmatched permission prompt waits for its tracker
+/// before we give up on it.
+const PERMISSION_BUFFER_SECS: i64 = 300;
 
 impl Pipeline {
     /// `rescan_interval` is the watcher's fallback sweep; a few seconds is
@@ -122,6 +132,7 @@ impl Pipeline {
             files: HashMap::new(),
             last_sweep: None,
             notify_tail,
+            pending_permissions: HashMap::new(),
         }
     }
 
@@ -177,6 +188,10 @@ impl Pipeline {
         // tracked file on each write is what burned a core (TWI-23).
         for path in &dirty {
             if let Some(session) = self.files.get_mut(path) {
+                // A transient poll error (a read racing a rotation, say) must
+                // not lose the file's tail: TailReader leaves its offset
+                // untouched on `Err`, so we simply skip this round and the
+                // same bytes are re-read on the next poll (BUGHUNT #11).
                 if let Ok(lines) = session.reader.poll() {
                     for line in &lines {
                         session.tracker.ingest_line(line);
@@ -226,32 +241,62 @@ impl Pipeline {
     /// input" idle notifications — those are covered by done/idle states
     /// and skipped here, so only genuine permission prompts alert.
     fn drain_notify_events(&mut self) {
-        let Some(tail) = &mut self.notify_tail else {
-            return;
-        };
-        let Ok(lines) = tail.poll() else { return };
-        for line in lines {
-            let Ok(event) = serde_json::from_str::<serde_json::Value>(&line) else {
-                continue;
-            };
-            let Some(session_id) = event.get("session_id").and_then(|v| v.as_str()) else {
-                continue;
-            };
-            let message = event
-                .get("message")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default();
-            if !message.to_lowercase().contains("permission") {
-                continue;
+        // 1. Fold new hook lines into the pending buffer (newest per
+        //    session_id). The prompt's receive time is its request timestamp,
+        //    so a buffered prompt keeps the right age when it finally lands.
+        if let Some(tail) = &mut self.notify_tail {
+            if let Ok(lines) = tail.poll() {
+                let now = Utc::now();
+                for line in lines {
+                    let Ok(event) = serde_json::from_str::<serde_json::Value>(&line) else {
+                        continue;
+                    };
+                    let Some(session_id) = event.get("session_id").and_then(|v| v.as_str()) else {
+                        continue;
+                    };
+                    let message = event
+                        .get("message")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default();
+                    if !message.to_lowercase().contains("permission") {
+                        continue;
+                    }
+                    self.pending_permissions
+                        .insert(session_id.to_string(), (now, message.to_string()));
+                }
             }
-            let now = Utc::now();
+        }
+
+        if self.pending_permissions.is_empty() {
+            return;
+        }
+
+        // 2. Forget prompts whose tracker never appeared (a stale hook line, a
+        //    session that ended before its transcript was ever discovered).
+        let now = Utc::now();
+        let ttl = chrono::Duration::seconds(PERMISSION_BUFFER_SECS);
+        self.pending_permissions
+            .retain(|_, (ts, _)| now - *ts < ttl);
+
+        // 3. Deliver every buffered prompt whose Claude tracker now exists and
+        //    drop it; the rest stay buffered for a later drain (BUGHUNT #13).
+        let mut delivered: Vec<String> = Vec::new();
+        for (session_id, (ts, message)) in &self.pending_permissions {
+            let mut matched = false;
             for session in self.files.values_mut() {
                 if let Tracker::Claude(tracker) = &mut session.tracker {
-                    if tracker.session_id() == Some(session_id) {
-                        tracker.note_permission_request(now, message.to_string());
+                    if tracker.session_id() == Some(session_id.as_str()) {
+                        tracker.note_permission_request(*ts, message.clone());
+                        matched = true;
                     }
                 }
             }
+            if matched {
+                delivered.push(session_id.clone());
+            }
+        }
+        for id in delivered {
+            self.pending_permissions.remove(&id);
         }
     }
 
@@ -262,15 +307,19 @@ impl Pipeline {
         &self,
         now: DateTime<Utc>,
     ) -> crate::plan_usage::PlanEstimate {
-        let events: Vec<_> = self
-            .files
-            .values()
-            .filter_map(|s| match &s.tracker {
-                Tracker::Claude(t) => Some(t.usage_events()),
-                Tracker::Codex(_) => None,
-            })
-            .flatten()
-            .collect();
+        // Dedup by API message id across trackers (last write wins): a message
+        // duplicated across resumed/compacted transcript files must count once
+        // (BUGHUNT #3).
+        let mut by_id: HashMap<String, (DateTime<Utc>, crate::plan_usage::TokenCounts)> =
+            HashMap::new();
+        for session in self.files.values() {
+            if let Tracker::Claude(t) = &session.tracker {
+                for (id, ts, tokens) in t.usage_events() {
+                    by_id.insert(id, (ts, tokens));
+                }
+            }
+        }
+        let events: Vec<_> = by_id.into_values().collect();
         crate::plan_usage::estimate(&events, now)
     }
 
@@ -303,19 +352,48 @@ impl Pipeline {
     /// Historical usage aggregation for the stats pane (today/7d/30d/all),
     /// from every tracked session's usage events.
     pub fn usage_stats(&self, now: DateTime<Utc>) -> crate::stats::UsageStats {
-        let sessions = self.files.values().map(|s| match &s.tracker {
-            Tracker::Claude(t) => crate::stats::SessionUsage {
+        // Claude message ids can repeat across resumed/compacted transcript
+        // files; attribute each id to a single tracker (last writer wins) so
+        // the stats pane doesn't double-count its tokens (BUGHUNT #3). Codex
+        // deltas are per-observation and carry no shared id — pass through.
+        let claude: Vec<(&ClaudeSessionTracker, Vec<_>)> = self
+            .files
+            .values()
+            .filter_map(|s| match &s.tracker {
+                Tracker::Claude(t) => Some((t, t.usage_events())),
+                Tracker::Codex(_) => None,
+            })
+            .collect();
+        let mut owner: HashMap<String, usize> = HashMap::new();
+        for (i, (_, events)) in claude.iter().enumerate() {
+            for (id, _, _) in events {
+                owner.insert(id.clone(), i);
+            }
+        }
+
+        let mut sessions: Vec<crate::stats::SessionUsage> = claude
+            .iter()
+            .enumerate()
+            .map(|(i, (tracker, events))| crate::stats::SessionUsage {
                 source: AgentSource::ClaudeCode,
-                model: t.model().map(String::from),
-                events: t.usage_events(),
-            },
-            Tracker::Codex(t) => crate::stats::SessionUsage {
-                source: AgentSource::Codex,
-                model: t.model().map(String::from),
-                events: t.usage_events(),
-            },
-        });
-        crate::stats::compute(&self.machine, sessions, now)
+                model: tracker.model().map(String::from),
+                events: events
+                    .iter()
+                    .filter(|(id, _, _)| owner.get(id) == Some(&i))
+                    .map(|(_, ts, tokens)| (*ts, *tokens))
+                    .collect(),
+            })
+            .collect();
+        for s in self.files.values() {
+            if let Tracker::Codex(t) = &s.tracker {
+                sessions.push(crate::stats::SessionUsage {
+                    source: AgentSource::Codex,
+                    model: t.model().map(String::from),
+                    events: t.usage_events(),
+                });
+            }
+        }
+        crate::stats::compute(&self.machine, sessions.into_iter(), now)
     }
 
     /// Everything currently tracked, evaluated now — for a full resend after
@@ -408,6 +486,79 @@ mod tests {
 
         let snaps = poll_until(&mut pipeline, Duration::from_millis(400), |s| !s.is_empty());
         assert!(snaps.is_empty(), "subagent file must not become a card");
+    }
+
+    #[test]
+    fn duplicate_message_id_across_files_counts_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut pipeline = Pipeline::new(
+            "wsl",
+            vec![SourceRoot::claude(dir.path())],
+            Duration::from_millis(50),
+        );
+        let now = Utc::now();
+        let iso = now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        // The same session resumed into a second transcript file: message id
+        // "m1" (from claude_line) appears in both, in two separate trackers.
+        append(&dir.path().join("sess-1.jsonl"), &claude_line(&iso, "end_turn"));
+        append(
+            &dir.path().join("sess-1-resume.jsonl"),
+            &claude_line(&iso, "end_turn"),
+        );
+        poll_until(&mut pipeline, Duration::from_secs(5), |s| s.len() >= 2);
+
+        // Plan estimate: the shared id is summed a single time.
+        let est = pipeline.claude_plan_estimate(now);
+        assert_eq!(est.weekly.messages, 1);
+        assert_eq!(est.weekly.tokens.input_tokens, 10);
+
+        // Stats: same — one message, one message's tokens, not doubled.
+        let stats = pipeline.usage_stats(now);
+        let all = stats.periods.iter().find(|p| p.key == "all").unwrap();
+        assert_eq!(all.claude.messages, 1);
+        assert_eq!(all.claude.input_tokens, 10);
+    }
+
+    #[test]
+    fn permission_prompt_buffered_until_tracker_appears() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut pipeline = Pipeline::new(
+            "wsl",
+            vec![SourceRoot::claude(dir.path())],
+            Duration::from_millis(50),
+        );
+        // Isolate from any real notify file; drive the buffer directly.
+        pipeline.notify_tail = None;
+        let now = Utc::now();
+        // A permission prompt arrives before the session's transcript has been
+        // discovered — the exact race BUGHUNT #13 was dropping.
+        pipeline.pending_permissions.insert(
+            "sess-1".to_string(),
+            (now, "Claude needs your permission to use Bash".to_string()),
+        );
+        pipeline.poll(Duration::from_millis(30));
+        assert_eq!(
+            pipeline.pending_permissions.len(),
+            1,
+            "an unmatched prompt must stay buffered, not be dropped"
+        );
+
+        // The transcript appears; the buffered prompt must now drive needs-you.
+        let iso = now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        append(&dir.path().join("sess-1.jsonl"), &claude_line(&iso, "end_turn"));
+        let snaps = poll_until(&mut pipeline, Duration::from_secs(5), |s| {
+            s.iter().any(|x| x.status == AgentStatus::NeedsYou)
+        });
+        assert!(
+            snaps
+                .iter()
+                .any(|x| x.agent_id == "sess-1" && x.status == AgentStatus::NeedsYou),
+            "buffered prompt must deliver once its tracker appears: {snaps:?}"
+        );
+        assert!(
+            pipeline.pending_permissions.is_empty(),
+            "a delivered prompt is dropped from the buffer"
+        );
     }
 
     #[test]

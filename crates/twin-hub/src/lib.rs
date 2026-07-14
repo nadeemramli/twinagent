@@ -146,19 +146,27 @@ impl HubService {
     /// Periodic housekeeping: stale-mark silent sessions and drop expired
     /// ones, pushing diffs for everything that changed.
     pub fn sweep(&self, now: DateTime<Utc>) {
-        let (staled, pruned): (Vec<AgentSnapshot>, Vec<String>) = {
+        let (staled_keys, pruned): (Vec<String>, Vec<String>) = {
             let mut registry = self.inner.registry.lock().unwrap();
-            let staled = registry
-                .mark_stale(now, STALE_AFTER)
-                .into_iter()
-                .filter_map(|key| registry.get(&key).cloned())
-                .collect();
+            let staled = registry.mark_stale(now, STALE_AFTER);
             let pruned = registry.prune(now, RETENTION);
             (staled, pruned)
         };
 
-        for snapshot in staled {
-            let key = session_key(&snapshot);
+        for key in staled_keys {
+            // Re-read under the lock right before persisting: between
+            // mark_stale and here a concurrent `ingest` may have superseded
+            // this session with a newer live snapshot (or `prune` may have
+            // dropped it). Only act while the registry still holds our Stale
+            // value for the key, so we never clobber the DB/UI with a snapshot
+            // older than the registry currently holds (BUGHUNT #6).
+            let snapshot = {
+                let registry = self.inner.registry.lock().unwrap();
+                match registry.get(&key) {
+                    Some(s) if s.status == twin_core::AgentStatus::Stale => s.clone(),
+                    _ => continue,
+                }
+            };
             if let Some(store) = &self.inner.store {
                 let store = store.lock().unwrap();
                 let _ = store.save_session(&snapshot);

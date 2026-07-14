@@ -94,6 +94,15 @@ fn set_panel(window: tauri::WebviewWindow, expanded: bool) {
     widget::set_expanded(&window, expanded);
 }
 
+/// The configured hub port, so the webview builds its WebSocket URL from the
+/// same `Settings` the hub binds. A changed `hub_port` must not strand the
+/// panel on the default 17871 with no sessions (BUGHUNT #1).
+#[tauri::command]
+fn get_hub_port(app: tauri::AppHandle) -> Result<u16, String> {
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    Ok(widget::load_settings(&data_dir).hub_port)
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
@@ -105,6 +114,7 @@ fn main() {
             toggle_panel,
             set_panel,
             get_stats,
+            get_hub_port,
             jump::jump,
             jump::focus_agent,
             widget::get_settings,

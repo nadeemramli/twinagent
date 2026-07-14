@@ -173,6 +173,19 @@ mod tests {
     }
 
     #[test]
+    fn read_error_leaves_offset_for_retry() {
+        // A directory at the followed path: open + metadata succeed, but the
+        // read errors. The offset must stay put so the same bytes are retried
+        // once the real (rotated-in) file appears (BUGHUNT #11).
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("adir");
+        std::fs::create_dir(&path).unwrap();
+        let mut reader = TailReader::new(&path);
+        assert!(reader.poll().is_err());
+        assert_eq!(reader.offset(), 0, "a poll error must not advance the offset");
+    }
+
+    #[test]
     fn handles_crlf_and_blank_lines() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("s.jsonl");

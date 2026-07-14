@@ -165,48 +165,88 @@ impl Forwarder {
         }
 
         let base = &self.bases[self.active];
-        let endpoint = format!("{base}/v1/snapshots");
+        let snapshots_endpoint = format!("{base}/v1/snapshots");
         let usage_endpoint = format!("{base}/v1/usage");
         let stats_endpoint = format!("{base}/v1/stats");
-        let result = (|| -> Result<(), ureq::Error> {
-            if !self.pending.is_empty() {
-                let batch: Vec<&AgentSnapshot> = self.pending.values().collect();
-                ureq::post(&endpoint)
-                    .timeout(Duration::from_secs(5))
-                    .send_json(&batch)?;
-                self.pending.clear();
-            }
-            if let Some(report) = &self.pending_usage {
-                ureq::post(&usage_endpoint)
-                    .timeout(Duration::from_secs(5))
-                    .send_json(report)?;
-                self.pending_usage = None;
-            }
-            if let Some(stats) = &self.pending_stats {
-                ureq::post(&stats_endpoint)
-                    .timeout(Duration::from_secs(5))
-                    .send_json(stats)?;
-                self.pending_stats = None;
-            }
-            Ok(())
-        })();
 
-        match result {
-            Ok(()) => self.backoff = BACKOFF_MIN,
-            Err(err) => {
-                // Keep the buffers; try the next candidate endpoint after a
-                // backoff. The hub restarting is normal (the Tauri app owns
-                // it), and which address reaches it depends on the WSL
-                // networking mode.
-                eprintln!(
-                    "twin-collector: hub unreachable at {base} ({err}); {} snapshot(s) buffered, retrying in {:?}",
-                    self.pending.len(),
-                    self.backoff
-                );
-                self.active = (self.active + 1) % self.bases.len();
-                self.next_attempt = Instant::now() + self.backoff;
-                self.backoff = (self.backoff * 2).min(BACKOFF_MAX);
+        // The three POSTs are independent. Snapshots are the product's
+        // lifeblood and the ONLY payload that drives endpoint rotation and
+        // backoff: a stuck usage/stats POST (schema skew, a flaky 5xx) must
+        // never starve snapshot delivery or knock us off a working hub
+        // (BUGHUNT #4).
+        let mut snapshots_failed = false;
+        if !self.pending.is_empty() {
+            let batch: Vec<&AgentSnapshot> = self.pending.values().collect();
+            match ureq::post(&snapshots_endpoint)
+                .timeout(Duration::from_secs(5))
+                .send_json(&batch)
+            {
+                Ok(_) => self.pending.clear(),
+                // A 4xx means the hub rejected this batch's shape; retrying
+                // the identical bytes forever would wedge all delivery, so
+                // drop it (BUGHUNT #5). Transport errors and 5xx are
+                // transient — keep the batch buffered and fail over.
+                Err(ureq::Error::Status(code, _)) if (400..500).contains(&code) => {
+                    eprintln!(
+                        "twin-collector: hub rejected {} snapshot(s) with {code} at {base}; dropping the batch",
+                        self.pending.len()
+                    );
+                    self.pending.clear();
+                }
+                Err(err) => {
+                    snapshots_failed = true;
+                    eprintln!(
+                        "twin-collector: hub unreachable at {base} ({err}); {} snapshot(s) buffered, retrying in {:?}",
+                        self.pending.len(),
+                        self.backoff
+                    );
+                }
             }
+        }
+
+        // Usage/stats use the same drop-on-4xx / keep-on-transient split, but
+        // isolated: a failure here leaves snapshot progress, the active
+        // endpoint, and the backoff untouched.
+        if let Some(report) = &self.pending_usage {
+            match ureq::post(&usage_endpoint)
+                .timeout(Duration::from_secs(5))
+                .send_json(report)
+            {
+                Ok(_) => self.pending_usage = None,
+                Err(ureq::Error::Status(code, _)) if (400..500).contains(&code) => {
+                    eprintln!("twin-collector: hub rejected usage report with {code} at {base}; dropping it");
+                    self.pending_usage = None;
+                }
+                Err(err) => {
+                    eprintln!("twin-collector: usage POST to {base} failed ({err}); keeping it buffered");
+                }
+            }
+        }
+        if let Some(stats) = &self.pending_stats {
+            match ureq::post(&stats_endpoint)
+                .timeout(Duration::from_secs(5))
+                .send_json(stats)
+            {
+                Ok(_) => self.pending_stats = None,
+                Err(ureq::Error::Status(code, _)) if (400..500).contains(&code) => {
+                    eprintln!("twin-collector: hub rejected stats with {code} at {base}; dropping it");
+                    self.pending_stats = None;
+                }
+                Err(err) => {
+                    eprintln!("twin-collector: stats POST to {base} failed ({err}); keeping it buffered");
+                }
+            }
+        }
+
+        if snapshots_failed {
+            // Try the next candidate endpoint after a backoff. The hub
+            // restarting is normal (the Tauri app owns it), and which address
+            // reaches it depends on the WSL networking mode.
+            self.active = (self.active + 1) % self.bases.len();
+            self.next_attempt = Instant::now() + self.backoff;
+            self.backoff = (self.backoff * 2).min(BACKOFF_MAX);
+        } else {
+            self.backoff = BACKOFF_MIN;
         }
     }
 }
@@ -242,5 +282,152 @@ mod tests {
         let table = "Iface\tDestination\tGateway \tFlags\n\
                      eth0\t00000000\t00000000\t0001\t0\t0\t0\t00000000\t0\t0\t0";
         assert_eq!(default_gateway(table), None);
+    }
+
+    // Independent-flush behavior (BUGHUNT #4/#5): a tiny blocking mock hub
+    // that answers each path with a configured status code lets us drive the
+    // Forwarder without a tokio runtime (it POSTs with blocking ureq).
+    mod flush {
+        use super::*;
+        use std::io::{BufRead, BufReader, Read, Write};
+        use std::net::TcpListener;
+        use std::sync::{Arc, Mutex};
+
+        struct MockHub {
+            base: String,
+            hits: Arc<Mutex<Vec<String>>>,
+        }
+
+        impl MockHub {
+            fn hits(&self, path_prefix: &str) -> usize {
+                self.hits
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|p| p.starts_with(path_prefix))
+                    .count()
+            }
+        }
+
+        fn spawn_mock(status_for: impl Fn(&str) -> u16 + Send + 'static) -> MockHub {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let base = format!("http://{}", listener.local_addr().unwrap());
+            let hits = Arc::new(Mutex::new(Vec::new()));
+            let hits_thread = hits.clone();
+            std::thread::spawn(move || {
+                for stream in listener.incoming() {
+                    let Ok(mut stream) = stream else { continue };
+                    let Ok(clone) = stream.try_clone() else { continue };
+                    let mut reader = BufReader::new(clone);
+                    let mut request_line = String::new();
+                    if reader.read_line(&mut request_line).is_err() {
+                        continue;
+                    }
+                    let path = request_line
+                        .split_whitespace()
+                        .nth(1)
+                        .unwrap_or("")
+                        .to_string();
+                    // Drain headers (capturing Content-Length) then the body,
+                    // so the client's write completes before we respond.
+                    let mut content_length = 0usize;
+                    loop {
+                        let mut line = String::new();
+                        if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                            break;
+                        }
+                        if line == "\r\n" || line == "\n" {
+                            break;
+                        }
+                        if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                            content_length = v.trim().parse().unwrap_or(0);
+                        }
+                    }
+                    let mut body = vec![0u8; content_length];
+                    let _ = reader.read_exact(&mut body);
+                    hits_thread.lock().unwrap().push(path.clone());
+                    let status = status_for(&path);
+                    let reason = match status {
+                        202 => "Accepted",
+                        400 => "Bad Request",
+                        422 => "Unprocessable Entity",
+                        500 => "Internal Server Error",
+                        503 => "Service Unavailable",
+                        _ => "OK",
+                    };
+                    let response = format!(
+                        "HTTP/1.1 {status} {reason}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    );
+                    let _ = stream.write_all(response.as_bytes());
+                    let _ = stream.flush();
+                }
+            });
+            MockHub { base, hits }
+        }
+
+        fn snap(id: &str) -> AgentSnapshot {
+            AgentSnapshot {
+                agent_id: id.into(),
+                source: twin_core::AgentSource::ClaudeCode,
+                machine: "wsl".into(),
+                project: "demo".into(),
+                status: twin_core::AgentStatus::Done,
+                git_branch: None,
+                current_task: None,
+                needs_user: false,
+                needs_user_reason: None,
+                usage: twin_core::UsageMetrics::default(),
+                last_activity: "2026-07-10T09:00:00Z".into(),
+                jump: None,
+            }
+        }
+
+        fn usage_report() -> UsageReport {
+            UsageReport {
+                machine: "wsl".into(),
+                claude: None,
+                claude_exact: None,
+                codex: None,
+                reported_at: "2026-07-10T09:00:00Z".into(),
+            }
+        }
+
+        #[test]
+        fn usage_failure_does_not_starve_snapshots_or_rotate() {
+            // Usage 5xx, snapshots fine.
+            let hub = spawn_mock(|path| if path.starts_with("/v1/usage") { 500 } else { 202 });
+            let mut fwd = Forwarder::new(&[hub.base.clone(), "http://127.0.0.1:9".into()]);
+            fwd.send(vec![snap("a")]);
+            fwd.send_usage(usage_report());
+
+            // Snapshots delivered and cleared despite the failing usage POST.
+            assert_eq!(fwd.pending(), 0, "snapshots must flush even when usage fails");
+            assert!(hub.hits("/v1/snapshots") >= 1);
+            // Usage stays buffered for a later retry, isolated.
+            assert!(fwd.pending_usage.is_some(), "failed usage stays buffered");
+            // And we did not rotate off the working endpoint or back off.
+            assert_eq!(fwd.active, 0, "usage failure must not rotate the endpoint");
+            assert_eq!(fwd.backoff, BACKOFF_MIN);
+        }
+
+        #[test]
+        fn snapshots_4xx_drops_the_batch() {
+            let hub = spawn_mock(|_| 422);
+            let mut fwd = Forwarder::new(&[hub.base.clone()]);
+            fwd.send(vec![snap("a")]);
+            // A non-retryable 4xx must not buffer the poison batch forever.
+            assert_eq!(fwd.pending(), 0, "a 4xx batch must be dropped, not re-queued");
+            assert!(hub.hits("/v1/snapshots") >= 1);
+        }
+
+        #[test]
+        fn snapshots_5xx_buffers_and_rotates() {
+            let hub = spawn_mock(|_| 503);
+            let mut fwd = Forwarder::new(&[hub.base.clone(), "http://127.0.0.1:9".into()]);
+            fwd.send(vec![snap("a")]);
+            // A transient 5xx keeps the batch and fails over to the next hub.
+            assert_eq!(fwd.pending(), 1, "5xx must keep the batch for retry");
+            assert_eq!(fwd.active, 1, "a snapshots failure rotates to the next endpoint");
+        }
     }
 }
