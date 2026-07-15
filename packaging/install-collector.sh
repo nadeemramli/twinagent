@@ -16,7 +16,10 @@ mkdir -p "$HOME/.config/systemd/user"
 install -m 644 packaging/twin-collector.service "$HOME/.config/systemd/user/twin-collector.service"
 
 systemctl --user daemon-reload
-systemctl --user enable --now twin-collector
+systemctl --user enable twin-collector
+# restart (not just enable --now) so a reinstall over a running unit actually
+# picks up the freshly-built binary instead of leaving the old one running.
+systemctl --user restart twin-collector
 
 echo
 systemctl --user --no-pager status twin-collector || true

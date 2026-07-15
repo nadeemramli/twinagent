@@ -108,6 +108,15 @@ impl ClaudeSessionTracker {
         self.permission_request = Some((ts, message));
     }
 
+    /// Clear a hook-reported permission prompt — the user answered it.
+    /// Claude Code's PreToolUse hook fires on approval, *before* the tool
+    /// runs, so a long approved tool no longer reads as needs-you for its
+    /// whole duration (BUGHUNT #2); denial produces a rejected tool_result
+    /// (→ interrupted) instead, so only approvals resolve this way.
+    pub fn clear_permission_request(&mut self) {
+        self.permission_request = None;
+    }
+
     /// True while the newest hook-reported prompt is unanswered: any
     /// transcript record after it (approval → result, denial → rejected)
     /// clears it.
@@ -567,6 +576,23 @@ mod tests {
         // Approval → the tool result lands after the prompt → cleared.
         t.ingest_line(&tool_result(20, "t1", "ok"));
         assert_ne!(t.state_at(at(21)), SessionState::NeedsYou);
+    }
+
+    #[test]
+    fn pretooluse_clears_needs_you_before_the_tool_finishes() {
+        // The BUGHUNT #2 case: an approved long-running tool must not read as
+        // needs-you for its whole duration. The PreToolUse hook fires on
+        // approval (before the tool runs), which clears the prompt.
+        let mut t = ClaudeSessionTracker::new();
+        t.ingest_line(&assistant_tool_use(0, "t1", "Bash"));
+        t.note_permission_request(at(11), "Claude needs your permission to use Bash".into());
+        assert_eq!(t.state_at(at(12)), SessionState::NeedsYou);
+
+        // User approves at t=13; the tool then runs for minutes with no new
+        // transcript records. Without the clear it would stay NeedsYou.
+        t.clear_permission_request();
+        assert_eq!(t.state_at(at(200)), SessionState::ToolRunning);
+        assert!(!t.snapshot("wsl", at(200)).needs_user);
     }
 
     #[test]

@@ -122,6 +122,16 @@ impl Pipeline {
             })
             .map(|path| TailReader::new(&path));
         if let Some(tail) = &mut notify_tail {
+            // The PreToolUse hook appends a line per tool call, so the notify
+            // file grows with usage. We skip its backlog anyway (old prompts
+            // are answered), so if it has gotten large just truncate it — the
+            // TailReader resets to offset 0 on a shrink. Boot-time only, so the
+            // only race is a hook line landing in the same instant as a
+            // collector restart (a missed resolve at worst).
+            const NOTIFY_MAX_BYTES: u64 = 1_048_576;
+            if std::fs::metadata(tail.path()).map(|m| m.len()).unwrap_or(0) > NOTIFY_MAX_BYTES {
+                let _ = std::fs::File::create(tail.path());
+            }
             let _ = tail.poll();
         }
 
@@ -244,6 +254,8 @@ impl Pipeline {
         // 1. Fold new hook lines into the pending buffer (newest per
         //    session_id). The prompt's receive time is its request timestamp,
         //    so a buffered prompt keeps the right age when it finally lands.
+        //    PreToolUse lines are resolutions — the user answered a prompt.
+        let mut resolves: Vec<String> = Vec::new();
         if let Some(tail) = &mut self.notify_tail {
             if let Ok(lines) = tail.poll() {
                 let now = Utc::now();
@@ -258,11 +270,28 @@ impl Pipeline {
                         .get("message")
                         .and_then(|v| v.as_str())
                         .unwrap_or_default();
-                    if !message.to_lowercase().contains("permission") {
-                        continue;
+                    if message.to_lowercase().contains("permission") {
+                        self.pending_permissions
+                            .insert(session_id.to_string(), (now, message.to_string()));
+                    } else if event.get("hook_event_name").and_then(|v| v.as_str())
+                        == Some("PreToolUse")
+                    {
+                        resolves.push(session_id.to_string());
                     }
-                    self.pending_permissions
-                        .insert(session_id.to_string(), (now, message.to_string()));
+                }
+            }
+        }
+
+        // 1b. Apply resolutions: a PreToolUse means the tool is about to run,
+        //     so any prompt for that session was approved — clear it, buffered
+        //     or already delivered (BUGHUNT #2).
+        for id in &resolves {
+            self.pending_permissions.remove(id);
+            for session in self.files.values_mut() {
+                if let Tracker::Claude(tracker) = &mut session.tracker {
+                    if tracker.session_id() == Some(id.as_str()) {
+                        tracker.clear_permission_request();
+                    }
                 }
             }
         }

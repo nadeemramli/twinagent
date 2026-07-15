@@ -10,6 +10,24 @@ fn wsl_distro() -> String {
     std::env::var("TWIN_WSL_DISTRO").unwrap_or_else(|_| "Ubuntu".into())
 }
 
+/// Percent-encode a filesystem path for a `vscode://` URI, preserving the
+/// path delimiters (`/`) and the Windows drive colon. Without this a folder
+/// with a space, `#`, or `%` in its path fails the handler's URL parse and
+/// the jump silently does nothing (BUGHUNT #b).
+fn encode_uri_path(path: &str) -> String {
+    let mut out = String::with_capacity(path.len());
+    for b in path.bytes() {
+        match b {
+            b'/' | b':' | b'-' | b'.' | b'_' | b'~'
+            | b'A'..=b'Z'
+            | b'a'..=b'z'
+            | b'0'..=b'9' => out.push(b as char),
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
 /// Best-effort focus of the window hosting an agent: visible top-level
 /// windows whose title contains `query` (IDE windows and terminal tabs
 /// usually carry the project folder name), scored by whether the title
@@ -128,9 +146,13 @@ pub fn jump(app: String, machine: String, dir: String) -> Result<(), String> {
         }
         "code" => {
             let uri = if wsl {
-                format!("vscode://vscode-remote/wsl+{}{}", wsl_distro(), dir)
+                format!(
+                    "vscode://vscode-remote/wsl+{}{}",
+                    wsl_distro(),
+                    encode_uri_path(&dir)
+                )
             } else {
-                format!("vscode://file/{}", dir.replace('\\', "/"))
+                format!("vscode://file/{}", encode_uri_path(&dir.replace('\\', "/")))
             };
             // explorer.exe dispatches the URI to the registered handler —
             // no shell quoting, no extra plugin.

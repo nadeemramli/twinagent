@@ -20,6 +20,10 @@ fn price_per_mtok(model: &str) -> Option<(f64, f64)> {
     let m = model.to_ascii_lowercase();
     if m.starts_with("claude-fable") || m.starts_with("claude-mythos") {
         Some((10.0, 50.0))
+    } else if m.contains("3-opus") || m.contains("opus-3") {
+        // Legacy Opus 3 billed 3x the 4.x rate; match it before the generic
+        // opus arm so old transcripts aren't under-priced (BUGHUNT #g).
+        Some((15.0, 75.0))
     } else if m.contains("opus") {
         Some((5.0, 25.0))
     } else if m.contains("sonnet") {
@@ -96,11 +100,18 @@ pub struct SessionUsage {
 
 /// Period start boundaries, oldest-inclusive. "today" is local midnight.
 fn period_starts(now: DateTime<Utc>) -> [(&'static str, Option<DateTime<Utc>>); 4] {
+    use chrono::LocalResult;
     let local_now = now.with_timezone(&Local);
-    let midnight = Local
-        .with_ymd_and_hms(local_now.year(), local_now.month(), local_now.day(), 0, 0, 0)
-        .single()
-        .map(|t| t.with_timezone(&Utc));
+    // Local midnight can be ambiguous (fall-back) or nonexistent (spring-
+    // forward) on a DST-change day. Take the earlier instant when ambiguous;
+    // when the wall-clock midnight doesn't exist, fall back to 24h ago so
+    // "today" always has a real lower bound and never collapses into "all"
+    // (BUGHUNT #c).
+    let midnight = match Local.with_ymd_and_hms(local_now.year(), local_now.month(), local_now.day(), 0, 0, 0) {
+        LocalResult::Single(t) | LocalResult::Ambiguous(t, _) => t.with_timezone(&Utc),
+        LocalResult::None => now - Duration::days(1),
+    };
+    let midnight = Some(midnight);
     [
         ("today", midnight),
         ("7d", Some(now - Duration::days(7))),

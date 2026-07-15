@@ -35,10 +35,11 @@ pub fn spawn(app: AppHandle, hub: HubService) {
                         continue;
                     }
                     let now = Instant::now();
-                    if last_toast
-                        .get(&logical_key)
-                        .is_some_and(|t| now.duration_since(*t) < COOLDOWN)
-                    {
+                    // Drop expired entries so the map stays bounded by the
+                    // number of sessions that alerted within one COOLDOWN,
+                    // not every session ever seen (BUGHUNT #d).
+                    last_toast.retain(|_, t| now.duration_since(*t) < COOLDOWN);
+                    if last_toast.contains_key(&logical_key) {
                         continue;
                     }
                     last_toast.insert(logical_key, now);

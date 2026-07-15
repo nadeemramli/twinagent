@@ -131,8 +131,14 @@
     }
     return [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0]));
   });
+  // Drop a machine's usage once its collector goes quiet — collectors report
+  // every 30s, so a report older than 3 min means a dead/offline collector
+  // whose reading must not linger as current "exact" data (BUGHUNT #e).
+  const USAGE_STALE_MS = 180_000;
   const usageReports = $derived(
-    Object.values(hub.usage).sort((a, b) => a.machine.localeCompare(b.machine)),
+    Object.values(hub.usage)
+      .filter((r) => now - Date.parse(r.reported_at) < USAGE_STALE_MS)
+      .sort((a, b) => a.machine.localeCompare(b.machine)),
   );
 </script>
 

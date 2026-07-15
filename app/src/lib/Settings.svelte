@@ -5,8 +5,13 @@
 
   let { onclose }: { onclose: () => void } = $props();
 
-  // Edit a draft; the live config only changes on Save.
-  let draft = $state<Settings>({ ...settings.current });
+  // Edit a draft; the live config only changes on Save. thresholds must be a
+  // fresh array — a shallow spread shares it with settings.current, so
+  // `bind:value` on a threshold field would apply live without Save.
+  let draft = $state<Settings>({
+    ...settings.current,
+    thresholds: [...settings.current.thresholds],
+  });
   let error = $state<string | null>(null);
   let saved = $state(false);
 
